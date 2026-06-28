@@ -25,7 +25,7 @@ type Tab = "dashboard" | "register" | "event" | "search" | "reports" | "profile"
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Species = "cattle" | "goat" | "sheep" | "donkey" | "buffalo" | "camel";
+type Species = "cattle" | "goat" | "sheep" | "buffalo" | "camel";
 type AnimalStatus =
   | "Registered at Breeder's Farm"
   | "Transferred, Pending Quarantine"
@@ -142,19 +142,20 @@ interface AnimalEvent {
   lng?: number;
   notes: string;
   recorded_at: string;
+  recorded_by: string;       // name of staff who recorded the event
   previous_owner?: string;
   transfer_condition?: string;
+  transferred_to?: string;   // destination farm/location for transfers
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const SPECIES_LIST: Species[] = ["cattle", "goat", "sheep", "donkey", "buffalo", "camel"];
+const SPECIES_LIST: Species[] = ["cattle", "goat", "sheep", "buffalo", "camel"];
 
 const SPECIES_META: Record<Species, { label: string; code: string; emoji: string; male: string; female: string; colorHint: string }> = {
   cattle:  { label: "Cattle",  code: "CTL", emoji: "🐄", male: "Bull",  female: "Cow",   colorHint: "e.g. Black & White, Brown" },
   goat:    { label: "Goat",    code: "GOT", emoji: "🐐", male: "Buck",  female: "Doe",   colorHint: "e.g. White, Tan, Spotted" },
   sheep:   { label: "Sheep",   code: "SHP", emoji: "🐑", male: "Ram",   female: "Ewe",   colorHint: "e.g. White, Grey, Black" },
-  donkey:  { label: "Donkey",  code: "DON", emoji: "🫏", male: "Jack",  female: "Jenny", colorHint: "e.g. Grey, Brown" },
   buffalo: { label: "Buffalo", code: "BUF", emoji: "🐃", male: "Bull",  female: "Cow",   colorHint: "e.g. Dark Grey, Black" },
   camel:   { label: "Camel",   code: "CAM", emoji: "🐪", male: "Bull",  female: "Cow",   colorHint: "e.g. Tan, Brown, Beige" },
 };
@@ -244,26 +245,43 @@ const SEED_ANIMALS: Animal[] = [
 ];
 
 const SEED_EVENTS: AnimalEvent[] = [
-  { id: "e1", animal_id: "MCF-CTL-202604-001", event_type: "Birth Registered", event_date: "2026-04-12", location: "Turbat, Kech", lat: 26.0035, lng: 63.0681, notes: "Healthy calf, normal birth weight.", recorded_at: "2026-04-12T08:05:00Z" },
-  { id: "e2", animal_id: "MCF-CTL-202604-001", event_type: "Transfer to MCF Farm", event_date: "2026-04-28", location: "MCF Central Farm, Turbat", notes: "Transferred in good health.", previous_owner: "Haji Kareem Baloch", transfer_condition: "Healthy - Good condition", recorded_at: "2026-04-28T10:00:00Z" },
-  { id: "e3", animal_id: "MCF-CTL-202604-001", event_type: "Quarantine Start", event_date: "2026-04-28", location: "MCF Quarantine Block A", notes: "Standard 21-day quarantine initiated.", recorded_at: "2026-04-28T11:00:00Z" },
-  { id: "e4", animal_id: "MCF-CTL-202604-001", event_type: "Quarantine End", event_date: "2026-05-19", location: "MCF Quarantine Block A", notes: "All tests clear. Released to main herd.", recorded_at: "2026-05-19T09:00:00Z" },
-  { id: "e5", animal_id: "MCF-CTL-202604-001", event_type: "Health Check", event_date: "2026-06-05", location: "MCF Central Farm", notes: "Routine check by Dr. Waqar. Weight 320kg, healthy.", recorded_at: "2026-06-05T14:00:00Z" },
-  { id: "e6", animal_id: "MCF-CTL-202604-002", event_type: "Birth Registered", event_date: "2026-04-15", location: "Turbat, Kech", lat: 26.0035, lng: 63.0681, notes: "Female calf, healthy delivery.", recorded_at: "2026-04-15T09:35:00Z" },
-  { id: "e7", animal_id: "MCF-CTL-202604-002", event_type: "Transfer to MCF Farm", event_date: "2026-05-01", location: "MCF Central Farm", notes: "Transferred.", previous_owner: "Haji Kareem Baloch", transfer_condition: "Healthy - Good condition", recorded_at: "2026-05-01T10:00:00Z" },
-  { id: "e8", animal_id: "MCF-CTL-202604-002", event_type: "Quarantine Start", event_date: "2026-05-01", location: "MCF Quarantine Block B", notes: "Quarantine initiated.", recorded_at: "2026-05-01T11:30:00Z" },
-  { id: "e9", animal_id: "MCF-GOT-202605-001", event_type: "Birth Registered", event_date: "2026-05-03", location: "Khuzdar, Balochistan", lat: 27.8136, lng: 66.6111, notes: "Buck kid, strong and active.", recorded_at: "2026-05-03T07:20:00Z" },
-  { id: "e10", animal_id: "MCF-GOT-202605-002", event_type: "Birth Registered", event_date: "2026-05-10", location: "Khuzdar, Balochistan", notes: "Doe kid, healthy.", recorded_at: "2026-05-10T10:05:00Z" },
-  { id: "e11", animal_id: "MCF-GOT-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-15", location: "MCF Central Farm", notes: "Transferred from Mengal farm.", previous_owner: "Saeed Ahmed Mengal", transfer_condition: "Healthy - Good condition", recorded_at: "2026-06-15T08:00:00Z" },
-  { id: "e12", animal_id: "MCF-SHP-202605-001", event_type: "Birth Registered", event_date: "2026-05-18", location: "Mastung, Balochistan", lat: 29.7985, lng: 66.8458, notes: "Ewe lamb, white fleece.", recorded_at: "2026-05-18T11:05:00Z" },
-  { id: "e13", animal_id: "MCF-SHP-202605-001", event_type: "Transfer to MCF Farm", event_date: "2026-06-01", location: "MCF Central Farm", notes: "", previous_owner: "Abdul Rahim Zehri", transfer_condition: "Healthy - Good condition", recorded_at: "2026-06-01T09:00:00Z" },
-  { id: "e14", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine Start", event_date: "2026-06-01", location: "MCF Quarantine Block A", notes: "", recorded_at: "2026-06-01T10:00:00Z" },
-  { id: "e15", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine End", event_date: "2026-06-22", location: "MCF Quarantine Block A", notes: "Cleared.", recorded_at: "2026-06-22T09:00:00Z" },
-  { id: "e16", animal_id: "MCF-SHP-202605-002", event_type: "Birth Registered", event_date: "2026-05-22", location: "Mastung, Balochistan", notes: "Ram lamb, grey markings.", recorded_at: "2026-05-22T08:50:00Z" },
-  { id: "e17", animal_id: "MCF-SHP-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-10", location: "MCF Central Farm", notes: "", previous_owner: "Abdul Rahim Zehri", transfer_condition: "Underweight", recorded_at: "2026-06-10T10:00:00Z" },
-  { id: "e18", animal_id: "MCF-SHP-202605-002", event_type: "Movement to Slaughter", event_date: "2026-06-25", location: "Quetta Slaughterhouse", notes: "Transferred per schedule.", recorded_at: "2026-06-25T07:00:00Z" },
-  { id: "e19", animal_id: "MCF-BUF-202606-001", event_type: "Birth Registered", event_date: "2026-06-01", location: "Dera Murad Jamali", lat: 29.4609, lng: 67.3287, notes: "Buffalo calf, dark grey, healthy.", recorded_at: "2026-06-01T06:35:00Z" },
-  { id: "e20", animal_id: "MCF-CAM-202606-001", event_type: "Birth Registered", event_date: "2026-06-10", location: "Sibi, Balochistan", lat: 29.5431, lng: 67.8772, notes: "Male calf camel, good weight.", recorded_at: "2026-06-10T09:05:00Z" },
+  // MCF-CTL-202604-001 — full lifecycle
+  { id: "e1",  animal_id: "MCF-CTL-202604-001", event_type: "Birth Registered",    event_date: "2026-04-12", location: "Turbat, Kech",           lat: 26.0035, lng: 63.0681, notes: "Healthy bull calf, normal birth weight approx. 28kg.", recorded_by: "Haji Kareem Baloch", recorded_at: "2026-04-12T08:05:00Z" },
+  { id: "e2",  animal_id: "MCF-CTL-202604-001", event_type: "Transfer to MCF Farm", event_date: "2026-04-28", location: "MCF Central Farm, Turbat", notes: "Animal in excellent condition on arrival.",           recorded_by: "Nasreen Mengal",    previous_owner: "Haji Kareem Baloch", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-04-28T10:00:00Z" },
+  { id: "e3",  animal_id: "MCF-CTL-202604-001", event_type: "Quarantine Start",     event_date: "2026-04-28", location: "MCF Quarantine Block A",   notes: "Standard 21-day quarantine initiated per protocol.",   recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-04-28T11:00:00Z" },
+  { id: "e4",  animal_id: "MCF-CTL-202604-001", event_type: "Quarantine End",       event_date: "2026-05-19", location: "MCF Quarantine Block A",   notes: "All tests clear — brucellosis, FMD negative. Released to main herd.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-19T09:00:00Z" },
+  { id: "e5",  animal_id: "MCF-CTL-202604-001", event_type: "Health Check",         event_date: "2026-06-05", location: "MCF Central Farm",         notes: "Routine check. Weight 320kg. BCS 3.5/5. Vaccinations up to date.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-05T14:00:00Z" },
+
+  // MCF-CTL-202604-002
+  { id: "e6",  animal_id: "MCF-CTL-202604-002", event_type: "Birth Registered",    event_date: "2026-04-15", location: "Turbat, Kech",             lat: 26.0035, lng: 63.0681, notes: "Female calf, healthy delivery. Birth weight 25kg.", recorded_by: "Haji Kareem Baloch", recorded_at: "2026-04-15T09:35:00Z" },
+  { id: "e7",  animal_id: "MCF-CTL-202604-002", event_type: "Transfer to MCF Farm", event_date: "2026-05-01", location: "MCF Central Farm, Turbat", notes: "Transferred with dam. Both in good health.",           recorded_by: "Nasreen Mengal",    previous_owner: "Haji Kareem Baloch", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-05-01T10:00:00Z" },
+  { id: "e8",  animal_id: "MCF-CTL-202604-002", event_type: "Quarantine Start",     event_date: "2026-05-01", location: "MCF Quarantine Block B",   notes: "Quarantine initiated. Separate pen from dam.",          recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-05-01T11:30:00Z" },
+
+  // MCF-GOT-202605-001
+  { id: "e9",  animal_id: "MCF-GOT-202605-001", event_type: "Birth Registered",    event_date: "2026-05-03", location: "Khuzdar, Balochistan",      lat: 27.8136, lng: 66.6111, notes: "Buck kid, strong and active. White & brown markings.", recorded_by: "Saeed Ahmed Mengal", recorded_at: "2026-05-03T07:20:00Z" },
+  { id: "e9b", animal_id: "MCF-GOT-202605-001", event_type: "Health Check",         event_date: "2026-05-20", location: "Khuzdar, Balochistan",      notes: "4-week check — good growth rate, no issues detected.", recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-05-20T10:00:00Z" },
+
+  // MCF-GOT-202605-002
+  { id: "e10", animal_id: "MCF-GOT-202605-002", event_type: "Birth Registered",     event_date: "2026-05-10", location: "Khuzdar, Balochistan",     notes: "Doe kid, all-white fleece. Birth weight 3.8kg.",         recorded_by: "Saeed Ahmed Mengal", recorded_at: "2026-05-10T10:05:00Z" },
+  { id: "e11", animal_id: "MCF-GOT-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-15", location: "MCF Central Farm, Turbat", notes: "Weaned and transferred. Good travel condition.",          recorded_by: "Nasreen Mengal",     previous_owner: "Saeed Ahmed Mengal", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-15T08:00:00Z" },
+
+  // MCF-SHP-202605-001 — full lifecycle
+  { id: "e12", animal_id: "MCF-SHP-202605-001", event_type: "Birth Registered",     event_date: "2026-05-18", location: "Mastung, Balochistan",     lat: 29.7985, lng: 66.8458, notes: "Ewe lamb, white fleece. Birth weight 4.2kg.",         recorded_by: "Abdul Rahim Zehri", recorded_at: "2026-05-18T11:05:00Z" },
+  { id: "e13", animal_id: "MCF-SHP-202605-001", event_type: "Transfer to MCF Farm", event_date: "2026-06-01", location: "MCF Central Farm, Turbat", notes: "Transported by road — 3 hours. No stress observed.",     recorded_by: "Nasreen Mengal",    previous_owner: "Abdul Rahim Zehri", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-01T09:00:00Z" },
+  { id: "e14", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine Start",     event_date: "2026-06-01", location: "MCF Quarantine Block A",   notes: "Placed in small ruminant quarantine pen.",               recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-06-01T10:00:00Z" },
+  { id: "e15", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine End",       event_date: "2026-06-22", location: "MCF Quarantine Block A",   notes: "21-day period complete. All tests cleared. Status changed to Active at Farm.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-22T09:00:00Z" },
+
+  // MCF-SHP-202605-002 — sent to slaughter
+  { id: "e16", animal_id: "MCF-SHP-202605-002", event_type: "Birth Registered",     event_date: "2026-05-22", location: "Mastung, Balochistan",     notes: "Ram lamb, grey & white markings. Birth weight 3.9kg.",   recorded_by: "Abdul Rahim Zehri", recorded_at: "2026-05-22T08:50:00Z" },
+  { id: "e17", animal_id: "MCF-SHP-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-10", location: "MCF Central Farm, Turbat", notes: "Arrived underweight — 12kg instead of expected 15kg.",   recorded_by: "Nasreen Mengal",    previous_owner: "Abdul Rahim Zehri", transfer_condition: "Underweight", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-10T10:00:00Z" },
+  { id: "e17b",animal_id: "MCF-SHP-202605-002", event_type: "Health Check",         event_date: "2026-06-12", location: "MCF Central Farm",         notes: "Supplementary feeding started. Weight monitored daily.",  recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-06-12T09:00:00Z" },
+  { id: "e18", animal_id: "MCF-SHP-202605-002", event_type: "Movement to Slaughter",event_date: "2026-06-25", location: "Quetta Slaughterhouse",    notes: "Transferred per management schedule. Live weight 16kg.", recorded_by: "Imran Khan Baloch", transferred_to: "Quetta Slaughterhouse, Quetta", recorded_at: "2026-06-25T07:00:00Z" },
+
+  // MCF-BUF-202606-001
+  { id: "e19", animal_id: "MCF-BUF-202606-001", event_type: "Birth Registered",    event_date: "2026-06-01", location: "Dera Murad Jamali",         lat: 29.4609, lng: 67.3287, notes: "Female calf, dark grey, healthy. Dam is high-yield milker.", recorded_by: "Ghulam Rasool Noor", recorded_at: "2026-06-01T06:35:00Z" },
+
+  // MCF-CAM-202606-001
+  { id: "e20", animal_id: "MCF-CAM-202606-001", event_type: "Birth Registered",    event_date: "2026-06-10", location: "Sibi, Balochistan",          lat: 29.5431, lng: 67.8772, notes: "Male calf, tan coat, good birth weight approx. 35kg.", recorded_by: "Mir Naseer Marri",   recorded_at: "2026-06-10T09:05:00Z" },
 ];
 
 // ─── Data Service (easy to swap to Supabase) ─────────────────────────────────
@@ -281,10 +299,18 @@ function saveToStorage<T>(key: string, value: T) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
 }
 
+const DATA_VERSION = "v4"; // bump to force re-seed when schema changes
+
 function useDataService() {
-  const [animals, setAnimals] = useState<Animal[]>(() =>
-    loadFromStorage("mcf_animals", SEED_ANIMALS)
-  );
+  const [animals, setAnimals] = useState<Animal[]>(() => {
+    if (loadFromStorage("mcf_data_version", "") !== DATA_VERSION) {
+      saveToStorage("mcf_data_version", DATA_VERSION);
+      saveToStorage("mcf_animals", SEED_ANIMALS);
+      saveToStorage("mcf_events", SEED_EVENTS);
+      return SEED_ANIMALS;
+    }
+    return loadFromStorage("mcf_animals", SEED_ANIMALS);
+  });
   const [events, setEvents] = useState<AnimalEvent[]>(() =>
     loadFromStorage("mcf_events", SEED_EVENTS)
   );
@@ -322,6 +348,7 @@ function useDataService() {
       lat: animal.birth_lat,
       lng: animal.birth_lng,
       notes: animal.notes || "",
+      recorded_by: animal.breeder_name,
       recorded_at: now.toISOString(),
     };
 
@@ -564,8 +591,12 @@ function AnimalDetailModal({ animal, events, onClose }: { animal: Animal; events
                     </div>
                     <div className={cn("pb-4 flex-1", i === events.length - 1 ? "" : "")}>
                       <p className="text-sm font-semibold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>{evt.event_type}</p>
+                      <p className="text-xs text-accent font-semibold flex items-center gap-1 mt-0.5"><User size={10} /> {evt.recorded_by}</p>
                       <p className="text-xs text-muted-foreground">{formatDate(evt.event_date)} · {evt.location}</p>
-                      {evt.lat && <p className="text-xs font-mono text-accent mt-0.5">{evt.lat.toFixed(4)}, {evt.lng?.toFixed(4)}</p>}
+                      {evt.lat && <p className="text-xs font-mono text-muted-foreground mt-0.5">{evt.lat.toFixed(4)}, {evt.lng?.toFixed(4)}</p>}
+                      {evt.previous_owner && (
+                        <p className="text-xs text-muted-foreground">From: <span className="font-medium text-foreground">{evt.previous_owner}</span>{evt.transferred_to && <> → <span className="font-medium text-foreground">{evt.transferred_to}</span></>}</p>
+                      )}
                       {evt.transfer_condition && <p className="text-xs text-muted-foreground">Condition: {evt.transfer_condition}</p>}
                       {evt.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{evt.notes}"</p>}
                     </div>
@@ -748,17 +779,32 @@ function AnimalDetailPage() {
                     <p className="text-sm font-semibold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
                       {evt.event_type}
                     </p>
-                    <p className="text-xs text-muted-foreground">{formatDate(evt.event_date)} · {evt.location}</p>
+                    <p className="text-xs text-accent font-semibold flex items-center gap-1 mt-0.5">
+                      <User size={11} /> {evt.recorded_by}
+                    </p>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <MapPin size={10} className="flex-shrink-0" /> {formatDate(evt.event_date)} · {evt.location}
+                    </p>
                     {evt.lat && (
-                      <p className="text-xs font-mono text-accent mt-0.5">{evt.lat.toFixed(4)}, {evt.lng?.toFixed(4)}</p>
+                      <p className="text-xs font-mono text-muted-foreground mt-0.5">{evt.lat.toFixed(4)}, {evt.lng?.toFixed(4)}</p>
+                    )}
+                    {evt.previous_owner && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        From: <span className="font-medium text-foreground">{evt.previous_owner}</span>
+                        {evt.transferred_to && <> → <span className="font-medium text-foreground">{evt.transferred_to}</span></>}
+                      </p>
                     )}
                     {evt.transfer_condition && (
-                      <p className="text-xs text-muted-foreground">Condition: {evt.transfer_condition}</p>
+                      <span className={cn(
+                        "inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded mt-0.5",
+                        evt.transfer_condition.includes("Good") ? "bg-muted text-secondary" :
+                        evt.transfer_condition === "Underweight" ? "bg-yellow-100 text-yellow-700" : "bg-orange-100 text-orange-700"
+                      )} style={{ fontFamily: "Montserrat, sans-serif" }}>{evt.transfer_condition}</span>
                     )}
                     {evt.notes && (
                       <p className="text-xs text-muted-foreground mt-0.5 italic">"{evt.notes}"</p>
                     )}
-                    <p className="text-[10px] text-muted-foreground/60 mt-1">
+                    <p className="text-[10px] text-muted-foreground/50 mt-1">
                       Recorded {new Date(evt.recorded_at).toLocaleString("en-PK", { dateStyle: "medium", timeStyle: "short" })}
                     </p>
                   </div>
@@ -1342,47 +1388,151 @@ function SearchScan({ animals, events, onAnimalClick }: {
       </div>
 
       {/* Results */}
-      <div className="px-4 md:px-6 py-3 pb-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+      <div className="px-4 md:px-6 py-3 pb-8 space-y-2">
         {filtered.length === 0 && (
           <div className="text-center py-12 text-muted-foreground text-sm">No animals found</div>
         )}
-        {filtered.map(animal => {
-          const sm = SPECIES_META[animal.species];
-          const animalEvents = events.filter(e => e.animal_id === animal.id);
-          const latest = animalEvents.sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime())[0];
-          return (
-            <Card key={animal.id} onClick={() => onAnimalClick(animal)} className="animate-fadeInUp">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-muted text-xl">
-                  {sm.emoji}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-mono text-xs font-bold text-foreground">{animal.id}</p>
-                    <StatusBadge status={animal.status} />
+        {filtered.map(animal => (
+          <AnimalSearchCard
+            key={animal.id}
+            animal={animal}
+            events={events.filter(e => e.animal_id === animal.id)
+              .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime())}
+            onViewFull={() => onAnimalClick(animal)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Expandable animal card with full tracking history ──────────────────────────
+
+function AnimalSearchCard({ animal, events, onViewFull }: {
+  animal: Animal;
+  events: AnimalEvent[];
+  onViewFull: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const sm = SPECIES_META[animal.species];
+  const latest = events[events.length - 1];
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden transition-shadow hover:shadow-md animate-fadeInUp">
+      {/* Summary row */}
+      <button
+        className="w-full flex items-start gap-3 p-4 text-left"
+        onClick={() => setExpanded(p => !p)}
+      >
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-muted text-xl">
+          {sm.emoji}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="font-mono text-xs font-bold text-foreground">{animal.id}</p>
+            <StatusBadge status={animal.status} />
+          </div>
+          <p className="text-sm font-semibold text-foreground mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>
+            {animal.breeder_name}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {animal.gender === "Male" ? sm.male : sm.female} · {animal.color} · Born {formatDate(animal.birth_date)}
+          </p>
+          {latest && !expanded && (
+            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+              <Clock size={11} />
+              Latest: {latest.event_type} · {formatDate(latest.event_date)} · {latest.recorded_by}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full"
+            style={{ fontFamily: "Montserrat, sans-serif" }}>
+            {events.length} events
+          </span>
+          <ChevronDown size={16} className={cn("text-muted-foreground transition-transform", expanded ? "rotate-180" : "")} />
+        </div>
+      </button>
+
+      {/* Expanded tracking history */}
+      {expanded && (
+        <div className="border-t border-border bg-muted/20 px-4 py-3 space-y-0 animate-fadeInUp">
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3"
+            style={{ fontFamily: "Montserrat, sans-serif" }}>Full Tracking History</p>
+
+          {events.map((evt, i) => {
+            const em = EVENT_META[evt.event_type];
+            const Icon = em.icon;
+            const isLast = i === events.length - 1;
+            return (
+              <div key={evt.id} className="flex gap-3">
+                {/* Timeline spine */}
+                <div className="flex flex-col items-center flex-shrink-0">
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center"
+                    style={{ backgroundColor: em.color + "18", border: `1.5px solid ${em.color}40` }}>
+                    <Icon size={13} style={{ color: em.color }} />
                   </div>
-                  <p className="text-sm font-semibold text-foreground mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                    {animal.breeder_name}
+                  {!isLast && <div className="w-px flex-1 bg-border my-1 min-h-[12px]" />}
+                </div>
+
+                {/* Event detail */}
+                <div className={cn("pb-3 flex-1 min-w-0", isLast && "pb-1")}>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-xs font-bold text-foreground leading-tight"
+                      style={{ fontFamily: "Montserrat, sans-serif" }}>{evt.event_type}</p>
+                    <p className="text-[10px] text-muted-foreground flex-shrink-0">{formatDate(evt.event_date)}</p>
+                  </div>
+
+                  {/* Who recorded it */}
+                  <p className="text-[11px] text-accent font-semibold mt-0.5 flex items-center gap-1">
+                    <User size={10} /> {evt.recorded_by}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {animal.gender === "Male" ? sm.male : sm.female} · {animal.color}
+
+                  {/* Location */}
+                  <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5">
+                    <MapPin size={10} className="flex-shrink-0" /> {evt.location}
+                    {evt.lat && <span className="font-mono ml-1 text-[10px]">({evt.lat.toFixed(3)}, {evt.lng?.toFixed(3)})</span>}
                   </p>
-                  {latest && (
-                    <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                      <Clock size={11} />
-                      {latest.event_type} · {formatDate(latest.event_date)}
+
+                  {/* Transfer details */}
+                  {evt.previous_owner && (
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      From: <span className="font-medium text-foreground">{evt.previous_owner}</span>
+                      {evt.transferred_to && <> → <span className="font-medium text-foreground">{evt.transferred_to}</span></>}
                     </p>
                   )}
-                </div>
-                <div className="flex-shrink-0 text-right">
-                  <p className="text-xs text-muted-foreground">{animalEvents.length} events</p>
-                  <ChevronRight size={16} className="text-muted-foreground mt-1" />
+                  {evt.transfer_condition && (
+                    <span className={cn(
+                      "inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded mt-0.5",
+                      evt.transfer_condition.includes("Good") ? "bg-muted text-secondary" :
+                      evt.transfer_condition === "Underweight" ? "bg-yellow-100 text-yellow-700" : "bg-orange-100 text-orange-700"
+                    )} style={{ fontFamily: "Montserrat, sans-serif" }}>
+                      {evt.transfer_condition}
+                    </span>
+                  )}
+
+                  {/* Notes */}
+                  {evt.notes && (
+                    <p className="text-[11px] text-muted-foreground mt-0.5 italic">"{evt.notes}"</p>
+                  )}
+
+                  {/* Timestamp */}
+                  <p className="text-[9px] text-muted-foreground/50 mt-0.5">
+                    Recorded {new Date(evt.recorded_at).toLocaleString("en-PK", { dateStyle: "medium", timeStyle: "short" })}
+                  </p>
                 </div>
               </div>
-            </Card>
-          );
-        })}
-      </div>
+            );
+          })}
+
+          {/* View full page link */}
+          <button onClick={onViewFull}
+            className="w-full mt-2 py-2 rounded-lg text-xs font-bold text-white hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5"
+            style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
+            <ScanLine size={13} /> Open Full Animal Record
+          </button>
+        </div>
+      )}
     </div>
   );
 }
