@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, createContext, useContext } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, createContext, useContext } from "react";
 import {
   HashRouter, Routes, Route, Navigate,
   useNavigate, useLocation, useParams, Link
@@ -6,13 +6,13 @@ import {
 import { QRCodeCanvas } from "qrcode.react";
 import {
   LayoutDashboard, PlusCircle, ClipboardList, Search, BarChart2,
-  MapPin, Download, Printer, X, ChevronRight,
+  MapPin, Download, Printer, X, ChevronRight, ChevronLeft,
   AlertTriangle, CheckCircle2, ArrowRightLeft, User,
   Stethoscope, Skull, Clock, ScanLine, FileDown, Database,
   Info, Activity, Eye, EyeOff, LogOut, Lock, Shield,
   UserCheck, Users, ChevronDown, Plus, Settings, KeyRound,
   Bell, ChevronRight as ChevronRight2, CheckCircle,
-  Maximize, Minimize
+  Maximize, Minimize, Trash2, Building2
 } from "lucide-react";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar,
@@ -22,25 +22,25 @@ import {
 // ─── Auth / Role Types ────────────────────────────────────────────────────────
 
 type Role = "administrator" | "farm_manager" | "veterinarian" | "breeder";
-type Tab = "dashboard" | "register" | "activities" | "search" | "reports" | "profile";
+type Tab = "dashboard" | "register" | "activities" | "search" | "reports" | "profile" | "farms";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Species = "cattle" | "goat" | "sheep" | "buffalo" | "camel";
+type Species = "donkey";
 type AnimalStatus =
   | "Registered at Breeder's Farm"
-  | "Transferred, Pending Quarantine"
+  | "Transferred to Farm"
+  | "Health Checked"
   | "In Quarantine"
   | "Cleared at Farm"
   | "Sent to Slaughterhouse";
 type EventType =
   | "Birth Registered"
-  | "Transfer to MCF Farm"
-  | "Quarantine Start"
-  | "Quarantine End"
-  | "Movement to Slaughter"
+  | "Transfer to Farm"
   | "Health Check"
-  | "Other";
+  | "Quarantine Started"
+  | "Quarantine Ended"
+  | "Slaughter";
 interface AuthUser {
   id: string;
   name: string;
@@ -68,7 +68,7 @@ const ROLE_META: Record<Role, RoleMeta> = {
     description: "Full system access — animals, events, reports, exports, and user management",
     color: "#ffffff",
     bg: "#182951",
-    tabs: ["dashboard", "register", "activities", "search", "reports", "profile"],
+    tabs: ["dashboard", "register", "activities", "search", "reports", "farms", "profile"],
     canWrite: true,
     canRecordEvents: true,
     canExport: true,
@@ -95,7 +95,7 @@ const ROLE_META: Record<Role, RoleMeta> = {
     canRecordEvents: true,
     canExport: false,
     canViewReports: true,
-    eventTypes: ["Health Check", "Quarantine Start", "Quarantine End", "Other"],
+    eventTypes: ["Health Check", "Quarantine Started", "Quarantine Ended"],
   },
   breeder: {
     label: "Breeder",
@@ -112,10 +112,10 @@ const ROLE_META: Record<Role, RoleMeta> = {
 
 // Demo credentials — username:password → user profile
 const DEMO_USERS: Array<AuthUser & { password: string }> = [
-  { id: "u1", name: "Imran Khan Baloch", email: "admin@mcfarm.pk",     password: "admin123",   role: "administrator", avatar: "IK" },
-  { id: "u2", name: "Nasreen Mengal",    email: "manager@mcfarm.pk",   password: "manager123", role: "farm_manager",  avatar: "NM" },
-  { id: "u3", name: "Dr. Waqar Rind",    email: "vet@mcfarm.pk",       password: "vet123",     role: "veterinarian",  avatar: "WR" },
-  { id: "u4", name: "Haji Kareem Baloch",email: "breeder@mcfarm.pk",   password: "breeder123", role: "breeder",       avatar: "HK" },
+  { id: "u1", name: "Imran Khan Baloch", email: "admin@tracknow.pk",     password: "admin123",   role: "administrator", avatar: "IK" },
+  { id: "u2", name: "Nasreen Mengal",    email: "manager@tracknow.pk",   password: "manager123", role: "farm_manager",  avatar: "NM" },
+  { id: "u3", name: "Dr. Waqar Rind",    email: "vet@tracknow.pk",       password: "vet123",     role: "veterinarian",  avatar: "WR" },
+  { id: "u4", name: "Haji Kareem Baloch",email: "breeder@tracknow.pk",   password: "breeder123", role: "breeder",       avatar: "HK" },
 ];
 
 interface Animal {
@@ -123,6 +123,8 @@ interface Animal {
   species: Species;
   birth_date: string;
   breeder_name: string;
+  breeder_cnic?: string;
+  registered_farm?: string;
   birth_location: string;
   birth_lat?: number;
   birth_lng?: number;
@@ -133,12 +135,38 @@ interface Animal {
   created_at: string;
 }
 
+interface RegisteredFarm {
+  id: string;
+  name: string;
+  code: string;  // short uppercase prefix used in animal IDs
+  location: string;
+  lat?: number;
+  lng?: number;
+  owner_name: string;
+  owner_cnic?: string;
+  phone?: string;
+  created_at: string;
+}
+
+function maskCnic(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 13);
+  if (digits.length <= 5) return digits;
+  if (digits.length <= 12) return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+  return `${digits.slice(0, 5)}-${digits.slice(5, 12)}-${digits.slice(12)}`;
+}
+
+function farmCodeFromName(name: string): string {
+  const skip = new Set(["and", "or", "the", "of", "&", "-", "e"]);
+  const words = name.split(/[\s\-&]+/).filter(w => w.length > 1 && !skip.has(w.toLowerCase()));
+  return words.slice(0, 3).map(w => w[0].toUpperCase()).join("") || "FRM";
+}
+
 interface AnimalEvent {
   id: string;
   animal_id: string;
   event_type: EventType;
   event_date: string;
-  location: string;
+  location?: string;
   lat?: number;
   lng?: number;
   notes: string;
@@ -151,32 +179,28 @@ interface AnimalEvent {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const SPECIES_LIST: Species[] = ["cattle", "goat", "sheep", "buffalo", "camel"];
+const SPECIES_LIST: Species[] = ["donkey"];
 
 const SPECIES_META: Record<Species, { label: string; code: string; emoji: string; male: string; female: string; colorHint: string }> = {
-  cattle:  { label: "Cattle",  code: "CTL", emoji: "🐄", male: "Bull",  female: "Cow",   colorHint: "e.g. Black & White, Brown" },
-  goat:    { label: "Goat",    code: "GOT", emoji: "🐐", male: "Buck",  female: "Doe",   colorHint: "e.g. White, Tan, Spotted" },
-  sheep:   { label: "Sheep",   code: "SHP", emoji: "🐑", male: "Ram",   female: "Ewe",   colorHint: "e.g. White, Grey, Black" },
-  buffalo: { label: "Buffalo", code: "BUF", emoji: "🐃", male: "Bull",  female: "Cow",   colorHint: "e.g. Dark Grey, Black" },
-  camel:   { label: "Camel",   code: "CAM", emoji: "🐪", male: "Bull",  female: "Cow",   colorHint: "e.g. Tan, Brown, Beige" },
+  donkey: { label: "Donkey", code: "DNK", emoji: "🫏", male: "Jack", female: "Jenny", colorHint: "e.g. Grey, Brown, Black & White" },
 };
 
 const STATUS_META: Record<AnimalStatus, { color: string; bg: string; label: string }> = {
-  "Registered at Breeder's Farm":    { color: "#2D7DD2", bg: "#EBF4FF", label: "At Breeder" },
-  "Transferred, Pending Quarantine": { color: "#182951", bg: "#E8EBF2", label: "Transferred" },
-  "In Quarantine":                   { color: "#9E9E9E", bg: "#F5F5F5", label: "Quarantine" },
-  "Cleared at Farm":                  { color: "#2FB572", bg: "#E3F8EF", label: "Cleared" },
-  "Sent to Slaughterhouse":          { color: "#d4183d", bg: "#FDEAEE", label: "Slaughter" },
+  "Registered at Breeder's Farm": { color: "#2D7DD2", bg: "#EBF4FF", label: "At Breeder" },
+  "Transferred to Farm":          { color: "#7B5EA7", bg: "#F0EBF9", label: "Transferred" },
+  "Health Checked":               { color: "#E07B30", bg: "#FEF3EA", label: "Health Checked" },
+  "In Quarantine":                { color: "#9E9E9E", bg: "#F5F5F5", label: "In Quarantine" },
+  "Cleared at Farm":              { color: "#2FB572", bg: "#E3F8EF", label: "Cleared" },
+  "Sent to Slaughterhouse":       { color: "#d4183d", bg: "#FDEAEE", label: "Slaughter" },
 };
 
 const EVENT_META: Record<EventType, { icon: typeof CheckCircle2; color: string }> = {
-  "Birth Registered":      { icon: PlusCircle,      color: "#2FB572" },
-  "Transfer to MCF Farm":  { icon: ArrowRightLeft,  color: "#2D7DD2" },
-  "Quarantine Start":      { icon: AlertTriangle,   color: "#9E9E9E" },
-  "Quarantine End":        { icon: CheckCircle2,    color: "#2FB572" },
-  "Movement to Slaughter": { icon: Skull,           color: "#d4183d" },
-  "Health Check":          { icon: Stethoscope,     color: "#182951" },
-  "Other":                 { icon: Info,            color: "#9E9E9E" },
+  "Birth Registered":  { icon: PlusCircle,     color: "#2FB572" },
+  "Transfer to Farm":  { icon: ArrowRightLeft,  color: "#7B5EA7" },
+  "Health Check":      { icon: Stethoscope,     color: "#E07B30" },
+  "Quarantine Started":{ icon: AlertTriangle,   color: "#9E9E9E" },
+  "Quarantine Ended":  { icon: CheckCircle2,    color: "#2FB572" },
+  "Slaughter":         { icon: Skull,           color: "#d4183d" },
 };
 
 const TRANSFER_CONDITIONS = [
@@ -193,28 +217,31 @@ const TRANSFER_CONDITIONS = [
 
 const STATUS_ORDER: AnimalStatus[] = [
   "Registered at Breeder's Farm",
-  "Transferred, Pending Quarantine",
+  "Transferred to Farm",
+  "Health Checked",
   "In Quarantine",
   "Cleared at Farm",
   "Sent to Slaughterhouse",
 ];
 
 const NEXT_STATUS: Partial<Record<AnimalStatus, AnimalStatus>> = {
-  "Registered at Breeder's Farm":    "Transferred, Pending Quarantine",
-  "Transferred, Pending Quarantine": "In Quarantine",
-  "In Quarantine":                   "Cleared at Farm",
-  "Cleared at Farm":                  "Sent to Slaughterhouse",
+  "Registered at Breeder's Farm": "Transferred to Farm",
+  "Transferred to Farm":          "Health Checked",
+  "Health Checked":               "In Quarantine",
+  "In Quarantine":                "Cleared at Farm",
+  "Cleared at Farm":              "Sent to Slaughterhouse",
 };
 
 // The single transitioning event type that advances a given status to the next stage
 const TRANSITION_EVENT_FOR_STATUS: Partial<Record<AnimalStatus, EventType>> = {
-  "Registered at Breeder's Farm":    "Transfer to MCF Farm",
-  "Transferred, Pending Quarantine": "Quarantine Start",
-  "In Quarantine":                   "Quarantine End",
-  "Cleared at Farm":                  "Movement to Slaughter",
+  "Registered at Breeder's Farm": "Transfer to Farm",
+  "Transferred to Farm":          "Health Check",
+  "Health Checked":               "Quarantine Started",
+  "In Quarantine":                "Quarantine Ended",
+  "Cleared at Farm":              "Slaughter",
 };
 
-const NON_TRANSITIONING_EVENTS: EventType[] = ["Health Check", "Other"];
+const NON_TRANSITIONING_EVENTS: EventType[] = [];
 
 function allowedEventTypesForAnimal(status: AnimalStatus, roleAllowed?: EventType[]): EventType[] {
   const next = TRANSITION_EVENT_FOR_STATUS[status];
@@ -224,101 +251,194 @@ function allowedEventTypesForAnimal(status: AnimalStatus, roleAllowed?: EventTyp
 
 // ─── Seed Data ───────────────────────────────────────────────────────────────
 
+const SEED_FARMS: RegisteredFarm[] = [
+  { id: "FARM-001", name: "Government Dairy & Cattle Farm", code: "GDC", location: "Quetta, Balochistan",           lat: 30.1798, lng: 66.9750, owner_name: "Government of Balochistan", owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-002", name: "Sibi Bhagnari Cattle Farm",      code: "SBC", location: "Sibi, Balochistan",             lat: 29.5431, lng: 67.8772, owner_name: "Haji Bhagnari",            owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-003", name: "Hub Livestock Farm",             code: "HLF", location: "Hub, Balochistan",              lat: 25.0572, lng: 66.9895, owner_name: "Abdul Karim Hub",          owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-004", name: "Nizam Cattle & Dairy Farm",      code: "NCD", location: "Turbat, Kech",                  lat: 26.0035, lng: 63.0681, owner_name: "Nizam ud Din",             owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-005", name: "Irfan Shahwani Agro & Livestock",code: "ISA", location: "Khuzdar, Balochistan",          lat: 27.8136, lng: 66.6111, owner_name: "Irfan Shahwani",           owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-006", name: "Karakh Livestock Farm",          code: "KLF", location: "Mastung, Balochistan",          lat: 29.7985, lng: 66.8458, owner_name: "Khan Gul Karakhi",         owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-007", name: "Munchi and Sons Livestock",      code: "MSL", location: "Dera Murad Jamali, Balochistan",lat: 29.4609, lng: 67.3287, owner_name: "Munchi Khan",              owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-008", name: "Chiltan Cattle Farm",            code: "CCF", location: "Quetta, Balochistan",           lat: 30.2200, lng: 66.8800, owner_name: "Raza Chiltan",             owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-009", name: "Suleiman Range Livestock",       code: "SRL", location: "Dera Bugti, Balochistan",       lat: 29.0369, lng: 69.1581, owner_name: "Sardar Bugti",             owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-010", name: "Bolan Pass Pastures",            code: "BPP", location: "Bolan, Balochistan",            lat: 29.8500, lng: 67.2000, owner_name: "Ghulam Bolan",             owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-011", name: "Hingol Organic Dairy",           code: "HOD", location: "Lasbela, Balochistan",          lat: 25.5078, lng: 65.3270, owner_name: "Hamid Hingol",             owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-012", name: "Mehergarh Cattle & Dairy",       code: "MCD", location: "Bolan, Balochistan",            lat: 29.4667, lng: 67.6167, owner_name: "Sardar Mehergarh",         owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-013", name: "Zhob Valley Livestock Producers",code: "ZVL", location: "Zhob, Balochistan",             lat: 31.3417, lng: 69.4481, owner_name: "Khan Zhob",                owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-014", name: "Dasht Plain Cattle Ranch",       code: "DPC", location: "Dasht, Balochistan",            lat: 26.5000, lng: 62.5000, owner_name: "Ali Dasht",                owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-015", name: "Sibi Bull Breeders",             code: "SBB", location: "Sibi, Balochistan",             lat: 29.5500, lng: 67.8900, owner_name: "Muhammad Sibi",            owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-016", name: "Royal Bhagnari Farms",           code: "RBF", location: "Sibi, Balochistan",             lat: 29.5600, lng: 67.9000, owner_name: "Raja Bhagnari",            owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-017", name: "Lohani Cattle Breeders",         code: "LCB", location: "Loralai, Balochistan",          lat: 30.3703, lng: 68.5997, owner_name: "Haji Lohani",              owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-018", name: "Baloch Heritage Livestock",      code: "BHL", location: "Kalat, Balochistan",            lat: 29.0225, lng: 66.5900, owner_name: "Sardar Baloch",            owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-019", name: "Pak-Baloch Livestock Enterprise",code: "PBL", location: "Quetta, Balochistan",           lat: 30.1900, lng: 67.0100, owner_name: "Pak Baloch Group",         owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+  { id: "FARM-020", name: "Koh-e-Suleiman Dairy Farm",      code: "KSD", location: "Dera Bugti, Balochistan",       lat: 30.0000, lng: 69.8000, owner_name: "Suleiman Khan",            owner_cnic: "", phone: "", created_at: "2026-01-01T00:00:00Z" },
+];
+
 const SEED_ANIMALS: Animal[] = [
-  {
-    id: "MCF-CTL-202604-001", species: "cattle", birth_date: "2026-04-12",
-    breeder_name: "GreenMeadow", birth_location: "Turbat, Kech",
-    birth_lat: 26.0035, birth_lng: 63.0681,
-    gender: "Male", color: "Black & White", status: "Cleared at Farm",
-    created_at: "2026-04-12T08:00:00Z",
-  },
-  {
-    id: "MCF-CTL-202604-002", species: "cattle", birth_date: "2026-04-15",
-    breeder_name: "RiverValley", birth_location: "Turbat, Kech",
-    birth_lat: 26.0035, birth_lng: 63.0681,
-    gender: "Female", color: "Brown", status: "In Quarantine",
-    created_at: "2026-04-15T09:30:00Z",
-  },
-  {
-    id: "MCF-GOT-202605-001", species: "goat", birth_date: "2026-05-03",
-    breeder_name: "AlpineGlow", birth_location: "Khuzdar, Balochistan",
-    birth_lat: 27.8136, birth_lng: 66.6111,
-    gender: "Male", color: "White & Brown", status: "Registered at Breeder's Farm",
-    created_at: "2026-05-03T07:15:00Z",
-  },
-  {
-    id: "MCF-GOT-202605-002", species: "goat", birth_date: "2026-05-10",
-    breeder_name: "DesertRose", birth_location: "Khuzdar, Balochistan",
-    gender: "Female", color: "All White", status: "Transferred, Pending Quarantine",
-    created_at: "2026-05-10T10:00:00Z",
-  },
-  {
-    id: "MCF-SHP-202605-001", species: "sheep", birth_date: "2026-05-18",
-    breeder_name: "GoldenFleece", birth_location: "Mastung, Balochistan",
-    birth_lat: 29.7985, birth_lng: 66.8458,
-    gender: "Female", color: "White", status: "Cleared at Farm",
-    created_at: "2026-05-18T11:00:00Z",
-  },
-  {
-    id: "MCF-SHP-202605-002", species: "sheep", birth_date: "2026-05-22",
-    breeder_name: "RollingHills", birth_location: "Mastung, Balochistan",
-    gender: "Male", color: "Grey & White", status: "Sent to Slaughterhouse",
-    created_at: "2026-05-22T08:45:00Z",
-  },
-  {
-    id: "MCF-BUF-202606-001", species: "buffalo", birth_date: "2026-06-01",
-    breeder_name: "HighlandCrest", birth_location: "Dera Murad Jamali",
-    birth_lat: 29.4609, birth_lng: 67.3287,
-    gender: "Female", color: "Dark Grey", status: "Registered at Breeder's Farm",
-    created_at: "2026-06-01T06:30:00Z",
-  },
-  {
-    id: "MCF-CAM-202606-001", species: "camel", birth_date: "2026-06-10",
-    breeder_name: "Al Marmoom", birth_location: "Sibi, Balochistan",
-    birth_lat: 29.5431, birth_lng: 67.8772,
-    gender: "Male", color: "Tan / Sandy Brown", status: "Registered at Breeder's Farm",
-    created_at: "2026-06-10T09:00:00Z",
-  },
+  // Government Dairy & Cattle Farm (GDC)
+  { id: "GDC-DNK-202603-001", species: "donkey", birth_date: "2026-03-05", breeder_name: "Muhammad Aslam", breeder_cnic: "54301-1234567-1", registered_farm: "Government Dairy & Cattle Farm", birth_location: "Quetta, Balochistan", birth_lat: 30.1798, birth_lng: 66.9750, gender: "Male",   color: "Grey",          status: "Cleared at Farm",                created_at: "2026-03-05T08:00:00Z" },
+  { id: "GDC-DNK-202603-002", species: "donkey", birth_date: "2026-03-18", breeder_name: "Fatima Baloch",   breeder_cnic: "54301-7654321-2", registered_farm: "Government Dairy & Cattle Farm", birth_location: "Quetta, Balochistan", birth_lat: 30.1798, birth_lng: 66.9750, gender: "Female", color: "Light Brown",    status: "Sent to Slaughterhouse",       created_at: "2026-03-18T09:00:00Z" },
+  { id: "GDC-DNK-202604-001", species: "donkey", birth_date: "2026-04-02", breeder_name: "Abdul Rahim",     breeder_cnic: "54301-2345678-3", registered_farm: "Government Dairy & Cattle Farm", birth_location: "Quetta, Balochistan", birth_lat: 30.1798, birth_lng: 66.9750, gender: "Male",   color: "Dark Grey",     status: "In Quarantine",                created_at: "2026-04-02T07:30:00Z" },
+
+  // Sibi Bhagnari Cattle Farm (SBC)
+  { id: "SBC-DNK-202603-001", species: "donkey", birth_date: "2026-03-10", breeder_name: "Haji Bhagnari",   breeder_cnic: "52101-3456789-1", registered_farm: "Sibi Bhagnari Cattle Farm",       birth_location: "Sibi, Balochistan",   birth_lat: 29.5431, birth_lng: 67.8772, gender: "Male",   color: "Brown",         status: "Cleared at Farm",                created_at: "2026-03-10T08:00:00Z" },
+  { id: "SBC-DNK-202604-001", species: "donkey", birth_date: "2026-04-15", breeder_name: "Zubair Bhagnari", breeder_cnic: "52101-4567890-2", registered_farm: "Sibi Bhagnari Cattle Farm",       birth_location: "Sibi, Balochistan",   birth_lat: 29.5431, birth_lng: 67.8772, gender: "Female", color: "Reddish Brown", status: "Registered at Breeder's Farm",  created_at: "2026-04-15T09:30:00Z" },
+
+  // Hub Livestock Farm (HLF)
+  { id: "HLF-DNK-202604-001", species: "donkey", birth_date: "2026-04-08", breeder_name: "Abdul Karim Hub", breeder_cnic: "43201-5678901-1", registered_farm: "Hub Livestock Farm",              birth_location: "Hub, Balochistan",    birth_lat: 25.0572, birth_lng: 66.9895, gender: "Male",   color: "Black & White", status: "Transferred to Farm", created_at: "2026-04-08T07:00:00Z" },
+  { id: "HLF-DNK-202605-001", species: "donkey", birth_date: "2026-05-03", breeder_name: "Naseem Hub",      breeder_cnic: "43201-6789012-2", registered_farm: "Hub Livestock Farm",              birth_location: "Hub, Balochistan",    birth_lat: 25.0572, birth_lng: 66.9895, gender: "Female", color: "Grey",          status: "Registered at Breeder's Farm",  created_at: "2026-05-03T10:00:00Z" },
+
+  // Nizam Cattle & Dairy Farm (NCD)
+  { id: "NCD-DNK-202604-001", species: "donkey", birth_date: "2026-04-20", breeder_name: "Nizam ud Din",    breeder_cnic: "52401-7890123-1", registered_farm: "Nizam Cattle & Dairy Farm",       birth_location: "Turbat, Kech",        birth_lat: 26.0035, birth_lng: 63.0681, gender: "Female", color: "Light Grey",    status: "Cleared at Farm",                created_at: "2026-04-20T08:30:00Z" },
+  { id: "NCD-DNK-202605-001", species: "donkey", birth_date: "2026-05-11", breeder_name: "Salma Nizam",     breeder_cnic: "52401-8901234-2", registered_farm: "Nizam Cattle & Dairy Farm",       birth_location: "Turbat, Kech",        birth_lat: 26.0035, birth_lng: 63.0681, gender: "Male",   color: "Brown",         status: "In Quarantine",                created_at: "2026-05-11T09:00:00Z" },
+
+  // Irfan Shahwani Agro & Livestock (ISA)
+  { id: "ISA-DNK-202605-001", species: "donkey", birth_date: "2026-05-01", breeder_name: "Irfan Shahwani",  breeder_cnic: "53201-9012345-1", registered_farm: "Irfan Shahwani Agro & Livestock", birth_location: "Khuzdar, Balochistan",birth_lat: 27.8136, birth_lng: 66.6111, gender: "Male",   color: "Dark Brown",    status: "Registered at Breeder's Farm",  created_at: "2026-05-01T07:15:00Z" },
+  { id: "ISA-DNK-202605-002", species: "donkey", birth_date: "2026-05-18", breeder_name: "Rehana Shahwani", breeder_cnic: "53201-0123456-2", registered_farm: "Irfan Shahwani Agro & Livestock", birth_location: "Khuzdar, Balochistan",birth_lat: 27.8136, birth_lng: 66.6111, gender: "Female", color: "Black",         status: "Transferred to Farm", created_at: "2026-05-18T10:00:00Z" },
+
+  // Karakh Livestock Farm (KLF)
+  { id: "KLF-DNK-202605-001", species: "donkey", birth_date: "2026-05-07", breeder_name: "Khan Gul Karakhi",breeder_cnic: "54101-1122334-1", registered_farm: "Karakh Livestock Farm",           birth_location: "Mastung, Balochistan",birth_lat: 29.7985, birth_lng: 66.8458, gender: "Male",   color: "Grey & White",  status: "Cleared at Farm",                created_at: "2026-05-07T08:00:00Z" },
+  { id: "KLF-DNK-202606-001", species: "donkey", birth_date: "2026-06-01", breeder_name: "Amina Karakhi",   breeder_cnic: "54101-2233445-2", registered_farm: "Karakh Livestock Farm",           birth_location: "Mastung, Balochistan",birth_lat: 29.7985, birth_lng: 66.8458, gender: "Female", color: "Brown & White", status: "Registered at Breeder's Farm",  created_at: "2026-06-01T09:30:00Z" },
+
+  // Munchi and Sons Livestock (MSL)
+  { id: "MSL-DNK-202605-001", species: "donkey", birth_date: "2026-05-22", breeder_name: "Munchi Khan",     breeder_cnic: "54401-3344556-1", registered_farm: "Munchi and Sons Livestock",       birth_location: "Dera Murad Jamali",   birth_lat: 29.4609, birth_lng: 67.3287, gender: "Male",   color: "Spotted Grey",  status: "Sent to Slaughterhouse",       created_at: "2026-05-22T08:45:00Z" },
+  { id: "MSL-DNK-202606-001", species: "donkey", birth_date: "2026-06-05", breeder_name: "Rafiq Munchi",    breeder_cnic: "54401-4455667-2", registered_farm: "Munchi and Sons Livestock",       birth_location: "Dera Murad Jamali",   birth_lat: 29.4609, birth_lng: 67.3287, gender: "Female", color: "Light Brown",   status: "Registered at Breeder's Farm",  created_at: "2026-06-05T07:00:00Z" },
+
+  // Chiltan Cattle Farm (CCF)
+  { id: "CCF-DNK-202606-001", species: "donkey", birth_date: "2026-06-03", breeder_name: "Raza Chiltan",    breeder_cnic: "54302-5566778-1", registered_farm: "Chiltan Cattle Farm",             birth_location: "Quetta, Balochistan", birth_lat: 30.2200, birth_lng: 66.8800, gender: "Male",   color: "Grey",          status: "In Quarantine",                created_at: "2026-06-03T10:00:00Z" },
+  { id: "CCF-DNK-202606-002", species: "donkey", birth_date: "2026-06-10", breeder_name: "Zainab Chiltan",  breeder_cnic: "54302-6677889-2", registered_farm: "Chiltan Cattle Farm",             birth_location: "Quetta, Balochistan", birth_lat: 30.2200, birth_lng: 66.8800, gender: "Female", color: "Dark Grey",     status: "Cleared at Farm",                created_at: "2026-06-10T09:00:00Z" },
+
+  // Suleiman Range Livestock (SRL)
+  { id: "SRL-DNK-202606-001", species: "donkey", birth_date: "2026-06-08", breeder_name: "Sardar Bugti",    breeder_cnic: "52301-7788990-1", registered_farm: "Suleiman Range Livestock",        birth_location: "Dera Bugti, Balochistan", birth_lat: 29.0369, birth_lng: 69.1581, gender: "Male", color: "Brown",         status: "Registered at Breeder's Farm",  created_at: "2026-06-08T08:00:00Z" },
+
+  // Bolan Pass Pastures (BPP)
+  { id: "BPP-DNK-202606-001", species: "donkey", birth_date: "2026-06-12", breeder_name: "Ghulam Bolan",    breeder_cnic: "53101-8899001-1", registered_farm: "Bolan Pass Pastures",             birth_location: "Bolan, Balochistan",  birth_lat: 29.8500, birth_lng: 67.2000, gender: "Female", color: "Black & Grey",  status: "Registered at Breeder's Farm",  created_at: "2026-06-12T07:30:00Z" },
+  { id: "BPP-DNK-202606-002", species: "donkey", birth_date: "2026-06-18", breeder_name: "Kiran Bolan",     breeder_cnic: "53101-9900112-2", registered_farm: "Bolan Pass Pastures",             birth_location: "Bolan, Balochistan",  birth_lat: 29.8500, birth_lng: 67.2000, gender: "Male",   color: "Light Grey",    status: "Transferred to Farm", created_at: "2026-06-18T09:00:00Z" },
+
+  // Hingol Organic Dairy (HOD)
+  { id: "HOD-DNK-202606-001", species: "donkey", birth_date: "2026-06-14", breeder_name: "Hamid Hingol",    breeder_cnic: "43101-0011223-1", registered_farm: "Hingol Organic Dairy",            birth_location: "Lasbela, Balochistan",birth_lat: 25.5078, birth_lng: 65.3270, gender: "Male",   color: "Cream White",   status: "Registered at Breeder's Farm",  created_at: "2026-06-14T08:00:00Z" },
+
+  // Mehergarh Cattle & Dairy (MCD)
+  { id: "MCD-DNK-202606-001", species: "donkey", birth_date: "2026-06-16", breeder_name: "Sardar Mehergarh",breeder_cnic: "53102-1122334-1", registered_farm: "Mehergarh Cattle & Dairy",        birth_location: "Bolan, Balochistan",  birth_lat: 29.4667, birth_lng: 67.6167, gender: "Female", color: "Brown",         status: "Cleared at Farm",                created_at: "2026-06-16T09:30:00Z" },
+
+  // Sibi Bull Breeders (SBB)
+  { id: "SBB-DNK-202606-001", species: "donkey", birth_date: "2026-06-20", breeder_name: "Muhammad Sibi",   breeder_cnic: "52102-2233445-1", registered_farm: "Sibi Bull Breeders",              birth_location: "Sibi, Balochistan",   birth_lat: 29.5500, birth_lng: 67.8900, gender: "Male",   color: "Dark Brown",    status: "Registered at Breeder's Farm",  created_at: "2026-06-20T07:00:00Z" },
+  { id: "SBB-DNK-202606-002", species: "donkey", birth_date: "2026-06-22", breeder_name: "Aisha Sibi",      breeder_cnic: "52102-3344556-2", registered_farm: "Sibi Bull Breeders",              birth_location: "Sibi, Balochistan",   birth_lat: 29.5500, birth_lng: 67.8900, gender: "Female", color: "Grey",          status: "In Quarantine",                created_at: "2026-06-22T08:00:00Z" },
+
+  // Royal Bhagnari Farms (RBF)
+  { id: "RBF-DNK-202606-001", species: "donkey", birth_date: "2026-06-24", breeder_name: "Raja Bhagnari",   breeder_cnic: "52103-4455667-1", registered_farm: "Royal Bhagnari Farms",            birth_location: "Sibi, Balochistan",   birth_lat: 29.5600, birth_lng: 67.9000, gender: "Male",   color: "Black",         status: "Registered at Breeder's Farm",  created_at: "2026-06-24T09:00:00Z" },
+
+  // Lohani Cattle Breeders (LCB)
+  { id: "LCB-DNK-202606-001", species: "donkey", birth_date: "2026-06-15", breeder_name: "Haji Lohani",     breeder_cnic: "53401-5566778-1", registered_farm: "Lohani Cattle Breeders",          birth_location: "Loralai, Balochistan",birth_lat: 30.3703, birth_lng: 68.5997, gender: "Female", color: "Tan",           status: "Transferred to Farm", created_at: "2026-06-15T08:30:00Z" },
+
+  // Baloch Heritage Livestock (BHL)
+  { id: "BHL-DNK-202606-001", species: "donkey", birth_date: "2026-06-17", breeder_name: "Sardar Baloch",   breeder_cnic: "54201-6677889-1", registered_farm: "Baloch Heritage Livestock",       birth_location: "Kalat, Balochistan",  birth_lat: 29.0225, birth_lng: 66.5900, gender: "Male",   color: "Grey & Brown",  status: "Registered at Breeder's Farm",  created_at: "2026-06-17T07:00:00Z" },
+
+  // Pak-Baloch Livestock Enterprise (PBL)
+  { id: "PBL-DNK-202606-001", species: "donkey", birth_date: "2026-06-19", breeder_name: "Pak Baloch CEO",  breeder_cnic: "54303-7788990-1", registered_farm: "Pak-Baloch Livestock Enterprise", birth_location: "Quetta, Balochistan", birth_lat: 30.1900, birth_lng: 67.0100, gender: "Female", color: "White & Grey",  status: "Cleared at Farm",                created_at: "2026-06-19T09:00:00Z" },
+
+  // Koh-e-Suleiman Dairy Farm (KSD)
+  { id: "KSD-DNK-202606-001", species: "donkey", birth_date: "2026-06-21", breeder_name: "Suleiman Khan",   breeder_cnic: "52302-8899001-1", registered_farm: "Koh-e-Suleiman Dairy Farm",      birth_location: "Dera Bugti, Balochistan", birth_lat: 30.0000, birth_lng: 69.8000, gender: "Male", color: "Brown",         status: "Registered at Breeder's Farm",  created_at: "2026-06-21T08:00:00Z" },
 ];
 
 const SEED_EVENTS: AnimalEvent[] = [
-  // MCF-CTL-202604-001 — full lifecycle
-  { id: "e1",  animal_id: "MCF-CTL-202604-001", event_type: "Birth Registered",    event_date: "2026-04-12", location: "Turbat, Kech",           lat: 26.0035, lng: 63.0681, notes: "Healthy bull calf, normal birth weight approx. 28kg.", recorded_by: "GreenMeadow", recorded_at: "2026-04-12T08:05:00Z" },
-  { id: "e2",  animal_id: "MCF-CTL-202604-001", event_type: "Transfer to MCF Farm", event_date: "2026-04-28", location: "MCF Central Farm, Turbat", notes: "Animal in excellent condition on arrival.",           recorded_by: "Nasreen Mengal",    previous_owner: "GreenMeadow", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-04-28T10:00:00Z" },
-  { id: "e3",  animal_id: "MCF-CTL-202604-001", event_type: "Quarantine Start",     event_date: "2026-04-28", location: "MCF Quarantine Block A",   notes: "Standard 21-day quarantine initiated per protocol.",   recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-04-28T11:00:00Z" },
-  { id: "e4",  animal_id: "MCF-CTL-202604-001", event_type: "Quarantine End",       event_date: "2026-05-19", location: "MCF Quarantine Block A",   notes: "All tests clear — brucellosis, FMD negative. Released to main herd.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-19T09:00:00Z" },
-  { id: "e5",  animal_id: "MCF-CTL-202604-001", event_type: "Health Check",         event_date: "2026-06-05", location: "MCF Central Farm",         notes: "Routine check. Weight 320kg. BCS 3.5/5. Vaccinations up to date.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-05T14:00:00Z" },
+  // GDC-DNK-202603-001 — Govt Farm, Cleared at Farm
+  { id: "e1",  animal_id: "GDC-DNK-202603-001", event_type: "Birth Registered",      event_date: "2026-03-05", notes: "Grey jack foal, healthy birth weight 22kg. Breeder: Muhammad Aslam, CNIC: 54301-1234567-1. Color: Grey. Farm: Government Dairy & Cattle Farm, Quetta.", recorded_by: "Muhammad Aslam",  recorded_at: "2026-03-05T08:05:00Z" },
+  { id: "e2",  animal_id: "GDC-DNK-202603-001", event_type: "Transfer to Farm",   event_date: "2026-03-28", notes: "Transferred in excellent condition. Previous owner: Muhammad Aslam. Destination: Central Farm, Quetta.", recorded_by: "Nasreen Mengal", previous_owner: "Muhammad Aslam", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Quetta", recorded_at: "2026-03-28T10:00:00Z" },
+  { id: "e2b", animal_id: "GDC-DNK-202603-001", event_type: "Health Check",       event_date: "2026-03-28", notes: "Pre-quarantine health check completed. Temperature normal, no signs of illness. Cleared for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-03-28T10:30:00Z" },
+  { id: "e3",  animal_id: "GDC-DNK-202603-001", event_type: "Quarantine Started", event_date: "2026-03-28", notes: "Standard 21-day quarantine initiated. Block A assigned.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-03-28T11:00:00Z" },
+  { id: "e4",  animal_id: "GDC-DNK-202603-001", event_type: "Quarantine Ended",        event_date: "2026-04-18", notes: "All tests clear. Released to main holding pen.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-04-18T09:00:00Z" },
+  { id: "e5",  animal_id: "GDC-DNK-202603-001", event_type: "Health Check",          event_date: "2026-05-10", notes: "Routine check. Weight 115kg. BCS 3.5/5. No abnormalities.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-10T14:00:00Z" },
 
-  // MCF-CTL-202604-002
-  { id: "e6",  animal_id: "MCF-CTL-202604-002", event_type: "Birth Registered",    event_date: "2026-04-15", location: "Turbat, Kech",             lat: 26.0035, lng: 63.0681, notes: "Female calf, healthy delivery. Birth weight 25kg.", recorded_by: "RiverValley", recorded_at: "2026-04-15T09:35:00Z" },
-  { id: "e7",  animal_id: "MCF-CTL-202604-002", event_type: "Transfer to MCF Farm", event_date: "2026-05-01", location: "MCF Central Farm, Turbat", notes: "Transferred with dam. Both in good health.",           recorded_by: "Nasreen Mengal",    previous_owner: "RiverValley", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-05-01T10:00:00Z" },
-  { id: "e8",  animal_id: "MCF-CTL-202604-002", event_type: "Quarantine Start",     event_date: "2026-05-01", location: "MCF Quarantine Block B",   notes: "Quarantine initiated. Separate pen from dam.",          recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-05-01T11:30:00Z" },
+  // GDC-DNK-202603-002 — Govt Farm, Sent to Slaughterhouse
+  { id: "e6",  animal_id: "GDC-DNK-202603-002", event_type: "Birth Registered",      event_date: "2026-03-18", notes: "Jenny foal, light brown, healthy delivery. 20kg. Breeder: Fatima Baloch, CNIC: 54301-9876543-2. Color: Light Brown. Farm: Government Dairy & Cattle Farm.", recorded_by: "Fatima Baloch",   recorded_at: "2026-03-18T09:05:00Z" },
+  { id: "e7",  animal_id: "GDC-DNK-202603-002", event_type: "Transfer to Farm",   event_date: "2026-04-10", notes: "Transferred in good health. Previous owner: Fatima Baloch.", recorded_by: "Nasreen Mengal", previous_owner: "Fatima Baloch", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Quetta", recorded_at: "2026-04-10T10:00:00Z" },
+  { id: "e7b", animal_id: "GDC-DNK-202603-002", event_type: "Health Check",       event_date: "2026-04-10", notes: "Pre-quarantine health check. Body condition score 3/5. No infectious signs. Approved for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-04-10T10:30:00Z" },
+  { id: "e8",  animal_id: "GDC-DNK-202603-002", event_type: "Quarantine Started", event_date: "2026-04-10", notes: "Quarantine Block B initiated.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-04-10T11:00:00Z" },
+  { id: "e9",  animal_id: "GDC-DNK-202603-002", event_type: "Quarantine Ended",        event_date: "2026-05-01", notes: "All clear. Animal released from quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-01T09:00:00Z" },
+  { id: "e10", animal_id: "GDC-DNK-202603-002", event_type: "Slaughter", event_date: "2026-06-01", notes: "Transferred per management schedule. Live weight 105kg.", recorded_by: "Imran Khan Baloch", transferred_to: "Quetta Slaughterhouse", recorded_at: "2026-06-01T07:00:00Z" },
 
-  // MCF-GOT-202605-001
-  { id: "e9",  animal_id: "MCF-GOT-202605-001", event_type: "Birth Registered",    event_date: "2026-05-03", location: "Khuzdar, Balochistan",      lat: 27.8136, lng: 66.6111, notes: "Buck kid, strong and active. White & brown markings.", recorded_by: "AlpineGlow", recorded_at: "2026-05-03T07:20:00Z" },
-  { id: "e9b", animal_id: "MCF-GOT-202605-001", event_type: "Health Check",         event_date: "2026-05-20", location: "Khuzdar, Balochistan",      notes: "4-week check — good growth rate, no issues detected.", recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-05-20T10:00:00Z" },
+  // GDC-DNK-202604-001 — Govt Farm, In Quarantine
+  { id: "e11", animal_id: "GDC-DNK-202604-001", event_type: "Birth Registered",      event_date: "2026-04-02", notes: "Jack foal, dark grey, strong build. 23kg. Breeder: Abdul Rahim, CNIC: 54301-5544332-3. Color: Dark Grey. Farm: Government Dairy & Cattle Farm.", recorded_by: "Abdul Rahim",     recorded_at: "2026-04-02T07:35:00Z" },
+  { id: "e12",  animal_id: "GDC-DNK-202604-001", event_type: "Transfer to Farm",   event_date: "2026-05-15", notes: "Good travel condition. Previous owner: Abdul Rahim.", recorded_by: "Nasreen Mengal", previous_owner: "Abdul Rahim", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Quetta", recorded_at: "2026-05-15T10:00:00Z" },
+  { id: "e12b", animal_id: "GDC-DNK-202604-001", event_type: "Health Check",       event_date: "2026-05-15", notes: "Health check on arrival. Weight 110kg. No visible injuries or illness. Cleared for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-15T10:30:00Z" },
+  { id: "e13",  animal_id: "GDC-DNK-202604-001", event_type: "Quarantine Started", event_date: "2026-05-15", notes: "Quarantine started on arrival. Block A assigned.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-15T11:00:00Z" },
 
-  // MCF-GOT-202605-002
-  { id: "e10", animal_id: "MCF-GOT-202605-002", event_type: "Birth Registered",     event_date: "2026-05-10", location: "Khuzdar, Balochistan",     notes: "Doe kid, all-white fleece. Birth weight 3.8kg.",         recorded_by: "DesertRose", recorded_at: "2026-05-10T10:05:00Z" },
-  { id: "e11", animal_id: "MCF-GOT-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-15", location: "MCF Central Farm, Turbat", notes: "Weaned and transferred. Good travel condition.",          recorded_by: "Nasreen Mengal",     previous_owner: "DesertRose", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-15T08:00:00Z" },
+  // SBC-DNK-202603-001 — Sibi Bhagnari, Cleared
+  { id: "e14", animal_id: "SBC-DNK-202603-001", event_type: "Birth Registered",      event_date: "2026-03-10", notes: "Brown jack foal, alert and active. 21kg. Breeder: Haji Bhagnari, CNIC: 42101-3344556-5. Color: Brown. Farm: Sibi Bhagnari Cattle Farm.", recorded_by: "Haji Bhagnari",   recorded_at: "2026-03-10T08:05:00Z" },
+  { id: "e15",  animal_id: "SBC-DNK-202603-001", event_type: "Transfer to Farm",   event_date: "2026-04-05", notes: "Excellent road condition. Previous owner: Haji Bhagnari.", recorded_by: "Nasreen Mengal", previous_owner: "Haji Bhagnari", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Sibi", recorded_at: "2026-04-05T10:00:00Z" },
+  { id: "e15b", animal_id: "SBC-DNK-202603-001", event_type: "Health Check",       event_date: "2026-04-05", notes: "Pre-quarantine health check. Good body condition, alert and responsive. Approved for quarantine entry.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-04-05T10:30:00Z" },
+  { id: "e16",  animal_id: "SBC-DNK-202603-001", event_type: "Quarantine Started", event_date: "2026-04-05", notes: "Quarantine initiated at Block A.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-04-05T11:00:00Z" },
+  { id: "e17", animal_id: "SBC-DNK-202603-001", event_type: "Quarantine Ended",        event_date: "2026-04-26", notes: "All clear. Moved to main herd.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-04-26T09:00:00Z" },
 
-  // MCF-SHP-202605-001 — full lifecycle
-  { id: "e12", animal_id: "MCF-SHP-202605-001", event_type: "Birth Registered",     event_date: "2026-05-18", location: "Mastung, Balochistan",     lat: 29.7985, lng: 66.8458, notes: "Ewe lamb, white fleece. Birth weight 4.2kg.",         recorded_by: "GoldenFleece", recorded_at: "2026-05-18T11:05:00Z" },
-  { id: "e13", animal_id: "MCF-SHP-202605-001", event_type: "Transfer to MCF Farm", event_date: "2026-06-01", location: "MCF Central Farm, Turbat", notes: "Transported by road — 3 hours. No stress observed.",     recorded_by: "Nasreen Mengal",    previous_owner: "GoldenFleece", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-01T09:00:00Z" },
-  { id: "e14", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine Start",     event_date: "2026-06-01", location: "MCF Quarantine Block A",   notes: "Placed in small ruminant quarantine pen.",               recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-06-01T10:00:00Z" },
-  { id: "e15", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine End",       event_date: "2026-06-22", location: "MCF Quarantine Block A",   notes: "21-day period complete. All tests cleared. Status changed to Cleared at Farm.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-22T09:00:00Z" },
+  // HLF-DNK-202604-001 — Hub Farm, Transferred
+  { id: "e18", animal_id: "HLF-DNK-202604-001", event_type: "Birth Registered",      event_date: "2026-04-08", notes: "Black & white jack foal. 22kg at birth. Breeder: Abdul Karim Hub, CNIC: 43201-7788990-1. Color: Black & White. Farm: Hub Livestock Farm.", recorded_by: "Abdul Karim Hub", recorded_at: "2026-04-08T07:05:00Z" },
+  { id: "e19", animal_id: "HLF-DNK-202604-001", event_type: "Transfer to Farm",      event_date: "2026-05-20", notes: "Weaned and transferred in good condition. Previous owner: Abdul Karim Hub.", recorded_by: "Nasreen Mengal", previous_owner: "Abdul Karim Hub", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Hub", recorded_at: "2026-05-20T10:00:00Z" },
 
-  // MCF-SHP-202605-002 — sent to slaughter
-  { id: "e16", animal_id: "MCF-SHP-202605-002", event_type: "Birth Registered",     event_date: "2026-05-22", location: "Mastung, Balochistan",     notes: "Ram lamb, grey & white markings. Birth weight 3.9kg.",   recorded_by: "RollingHills", recorded_at: "2026-05-22T08:50:00Z" },
-  { id: "e17", animal_id: "MCF-SHP-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-10", location: "MCF Central Farm, Turbat", notes: "Arrived underweight — 12kg instead of expected 15kg.",   recorded_by: "Nasreen Mengal",    previous_owner: "RollingHills", transfer_condition: "Underweight", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-10T10:00:00Z" },
-  { id: "e17b",animal_id: "MCF-SHP-202605-002", event_type: "Health Check",         event_date: "2026-06-12", location: "MCF Central Farm",         notes: "Supplementary feeding started. Weight monitored daily.",  recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-06-12T09:00:00Z" },
-  { id: "e18", animal_id: "MCF-SHP-202605-002", event_type: "Movement to Slaughter",event_date: "2026-06-25", location: "Quetta Slaughterhouse",    notes: "Transferred per management schedule. Live weight 16kg.", recorded_by: "Imran Khan Baloch", transferred_to: "Quetta Slaughterhouse, Quetta", recorded_at: "2026-06-25T07:00:00Z" },
+  // NCD-DNK-202604-001 — Nizam Farm, Cleared
+  { id: "e20", animal_id: "NCD-DNK-202604-001", event_type: "Birth Registered",      event_date: "2026-04-20", notes: "Light grey jenny foal, healthy dam. 20kg. Breeder: Nizam ud Din, CNIC: 52101-6677889-0. Color: Light Grey. Farm: Nizam Cattle & Dairy Farm, Turbat.", recorded_by: "Nizam ud Din",    recorded_at: "2026-04-20T08:35:00Z" },
+  { id: "e21",  animal_id: "NCD-DNK-202604-001", event_type: "Transfer to Farm",   event_date: "2026-05-12", notes: "Good arrival condition. Previous owner: Nizam ud Din.", recorded_by: "Nasreen Mengal", previous_owner: "Nizam ud Din", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Turbat", recorded_at: "2026-05-12T10:00:00Z" },
+  { id: "e21b", animal_id: "NCD-DNK-202604-001", event_type: "Health Check",       event_date: "2026-05-12", notes: "Health check on arrival. Weight 98kg. Vitals normal. Coat condition good. Cleared for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-12T10:30:00Z" },
+  { id: "e22",  animal_id: "NCD-DNK-202604-001", event_type: "Quarantine Started", event_date: "2026-05-12", notes: "Standard quarantine initiated. Block A.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-12T11:00:00Z" },
+  { id: "e23", animal_id: "NCD-DNK-202604-001", event_type: "Quarantine Ended",        event_date: "2026-06-02", notes: "Released. All tests passed.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-02T09:00:00Z" },
 
-  // MCF-BUF-202606-001
-  { id: "e19", animal_id: "MCF-BUF-202606-001", event_type: "Birth Registered",    event_date: "2026-06-01", location: "Dera Murad Jamali",         lat: 29.4609, lng: 67.3287, notes: "Female calf, dark grey, healthy. Dam is high-yield milker.", recorded_by: "HighlandCrest", recorded_at: "2026-06-01T06:35:00Z" },
+  // KLF-DNK-202605-001 — Karakh Farm, Cleared
+  { id: "e24", animal_id: "KLF-DNK-202605-001", event_type: "Birth Registered",      event_date: "2026-05-07", notes: "Grey & white jack foal, calm temperament. 21kg. Breeder: Khan Gul Karakhi, CNIC: 54501-2233445-7. Color: Grey & White. Farm: Karakh Livestock Farm.", recorded_by: "Khan Gul Karakhi", recorded_at: "2026-05-07T08:05:00Z" },
+  { id: "e25",  animal_id: "KLF-DNK-202605-001", event_type: "Transfer to Farm",   event_date: "2026-06-01", notes: "4-hour road transport. No stress observed. Previous owner: Khan Gul Karakhi.", recorded_by: "Nasreen Mengal", previous_owner: "Khan Gul Karakhi", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Mastung", recorded_at: "2026-06-01T10:00:00Z" },
+  { id: "e25b", animal_id: "KLF-DNK-202605-001", event_type: "Health Check",       event_date: "2026-06-01", notes: "Post-transport health check. No injuries. Temperature 37.8°C. Weight 108kg. Cleared for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-01T10:30:00Z" },
+  { id: "e26",  animal_id: "KLF-DNK-202605-001", event_type: "Quarantine Started", event_date: "2026-06-01", notes: "Quarantine started at Block A on arrival.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-01T11:00:00Z" },
+  { id: "e27", animal_id: "KLF-DNK-202605-001", event_type: "Quarantine Ended",        event_date: "2026-06-22", notes: "Cleared all tests. Moved to main area.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-22T09:00:00Z" },
 
-  // MCF-CAM-202606-001
-  { id: "e20", animal_id: "MCF-CAM-202606-001", event_type: "Birth Registered",    event_date: "2026-06-10", location: "Sibi, Balochistan",          lat: 29.5431, lng: 67.8772, notes: "Male calf, tan coat, good birth weight approx. 35kg.", recorded_by: "Al Marmoom",   recorded_at: "2026-06-10T09:05:00Z" },
+  // MSL-DNK-202605-001 — Munchi Farm, Slaughter
+  { id: "e28", animal_id: "MSL-DNK-202605-001", event_type: "Birth Registered",      event_date: "2026-05-22", notes: "Spotted grey jack foal. 20kg. Breeder: Munchi Khan, CNIC: 43401-9988776-3. Color: Spotted Grey. Farm: Munchi and Sons Livestock, Dera Murad Jamali.", recorded_by: "Munchi Khan",     recorded_at: "2026-05-22T08:50:00Z" },
+  { id: "e29",  animal_id: "MSL-DNK-202605-001", event_type: "Transfer to Farm",   event_date: "2026-06-10", notes: "Arrived underweight at 90kg. Previous owner: Munchi Khan. Transfer condition: Underweight.", recorded_by: "Nasreen Mengal", previous_owner: "Munchi Khan", transfer_condition: "Underweight", transferred_to: "Central Farm", recorded_at: "2026-06-10T10:00:00Z" },
+  { id: "e29b", animal_id: "MSL-DNK-202605-001", event_type: "Health Check",       event_date: "2026-06-10", notes: "Health check on arrival. Underweight at 90kg, BCS 1.5/5. Supplementary feeding plan prescribed. Approved for quarantine with monitoring.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-10T10:30:00Z" },
+  { id: "e30",  animal_id: "MSL-DNK-202605-001", event_type: "Quarantine Started", event_date: "2026-06-10", notes: "Quarantine Block B. Monitoring weight and health.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-10T11:00:00Z" },
+  { id: "e32", animal_id: "MSL-DNK-202605-001", event_type: "Quarantine Ended",        event_date: "2026-06-24", notes: "Weight improved to 97kg. Released from quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-24T09:00:00Z" },
+  { id: "e33", animal_id: "MSL-DNK-202605-001", event_type: "Slaughter", event_date: "2026-06-28", notes: "Per management schedule. Live weight 97kg at dispatch.", recorded_by: "Imran Khan Baloch", transferred_to: "Quetta Slaughterhouse", recorded_at: "2026-06-28T07:00:00Z" },
+
+  // Remaining animals — Birth Registered events only
+  { id: "e34", animal_id: "SBC-DNK-202604-001", event_type: "Birth Registered", event_date: "2026-04-15", notes: "Reddish brown jenny foal. 19kg. Breeder: Zubair Bhagnari, CNIC: 42101-1122334-4. Color: Reddish Brown. Farm: Sibi Bhagnari Cattle Farm.", recorded_by: "Zubair Bhagnari",  recorded_at: "2026-04-15T09:35:00Z" },
+  { id: "e35", animal_id: "HLF-DNK-202605-001", event_type: "Birth Registered", event_date: "2026-05-03", notes: "Grey jenny foal, calm temperament. 20kg. Breeder: Naseem Hub, CNIC: 43201-4455667-8. Color: Grey. Farm: Hub Livestock Farm.", recorded_by: "Naseem Hub",       recorded_at: "2026-05-03T10:05:00Z" },
+  { id: "e36", animal_id: "NCD-DNK-202605-001", event_type: "Birth Registered", event_date: "2026-05-11", notes: "Brown jack foal. 21kg. Breeder: Salma Nizam, CNIC: 52101-3344556-9. Color: Brown. Farm: Nizam Cattle & Dairy Farm.", recorded_by: "Salma Nizam",      recorded_at: "2026-05-11T09:05:00Z" },
+  { id: "e37", animal_id: "ISA-DNK-202605-001", event_type: "Birth Registered", event_date: "2026-05-01", notes: "Dark brown jack foal. 22kg. Breeder: Irfan Shahwani, CNIC: 44301-6677889-2. Color: Dark Brown. Farm: Irfan Shahwani Agro & Livestock.", recorded_by: "Irfan Shahwani",   recorded_at: "2026-05-01T07:20:00Z" },
+  { id: "e38", animal_id: "ISA-DNK-202605-002", event_type: "Birth Registered", event_date: "2026-05-18", notes: "Black jenny foal. 19kg. Breeder: Rehana Shahwani, CNIC: 44301-7788990-6. Color: Black. Farm: Irfan Shahwani Agro & Livestock.", recorded_by: "Rehana Shahwani",  recorded_at: "2026-05-18T10:05:00Z" },
+  { id: "e39", animal_id: "KLF-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-01", notes: "Brown & white jenny foal. 20kg. Breeder: Amina Karakhi, CNIC: 54501-8899001-3. Color: Brown & White. Farm: Karakh Livestock Farm.", recorded_by: "Amina Karakhi",    recorded_at: "2026-06-01T09:35:00Z" },
+  { id: "e40", animal_id: "MSL-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-05", notes: "Light brown jenny foal. 21kg. Breeder: Rafiq Munchi, CNIC: 43401-5566778-1. Color: Light Brown. Farm: Munchi and Sons Livestock.", recorded_by: "Rafiq Munchi",     recorded_at: "2026-06-05T07:05:00Z" },
+  { id: "e41", animal_id: "CCF-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-03", notes: "Grey jack foal. 23kg. Breeder: Raza Chiltan, CNIC: 54301-2211334-0. Color: Grey. Farm: Chiltan Cattle Farm, Quetta.", recorded_by: "Raza Chiltan",     recorded_at: "2026-06-03T10:05:00Z" },
+  { id: "e42",  animal_id: "CCF-DNK-202606-001", event_type: "Transfer to Farm",   event_date: "2026-06-20", notes: "Transferred in good condition. Previous owner: Raza Chiltan.", recorded_by: "Nasreen Mengal", previous_owner: "Raza Chiltan", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Quetta", recorded_at: "2026-06-20T10:00:00Z" },
+  { id: "e42b", animal_id: "CCF-DNK-202606-001", event_type: "Health Check",       event_date: "2026-06-20", notes: "Health check on arrival. Weight 105kg. Temperature normal. No abnormalities detected. Cleared for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-20T10:30:00Z" },
+  { id: "e43",  animal_id: "CCF-DNK-202606-001", event_type: "Quarantine Started", event_date: "2026-06-20", notes: "Quarantine started. Block A assigned.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-20T11:00:00Z" },
+  { id: "e44", animal_id: "CCF-DNK-202606-002", event_type: "Birth Registered", event_date: "2026-06-10", notes: "Dark grey jenny foal. 20kg. Breeder: Zainab Chiltan, CNIC: 54301-3322115-6. Color: Dark Grey. Farm: Chiltan Cattle Farm.", recorded_by: "Zainab Chiltan",   recorded_at: "2026-06-10T09:05:00Z" },
+  { id: "e45",  animal_id: "CCF-DNK-202606-002", event_type: "Transfer to Farm",   event_date: "2026-06-25", notes: "Good arrival condition. Previous owner: Zainab Chiltan.", recorded_by: "Nasreen Mengal", previous_owner: "Zainab Chiltan", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Quetta", recorded_at: "2026-06-25T10:00:00Z" },
+  { id: "e45b", animal_id: "CCF-DNK-202606-002", event_type: "Health Check",       event_date: "2026-06-25", notes: "Health check completed. Weight 100kg. BCS 3/5. No signs of disease. Cleared for quarantine placement.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-25T10:30:00Z" },
+  { id: "e46",  animal_id: "CCF-DNK-202606-002", event_type: "Quarantine Started", event_date: "2026-06-25", notes: "Quarantine Block B assigned.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-25T11:00:00Z" },
+  { id: "e47", animal_id: "CCF-DNK-202606-002", event_type: "Quarantine Ended",    event_date: "2026-06-28", notes: "Cleared all checks. Released.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-28T09:00:00Z" },
+  { id: "e48", animal_id: "SRL-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-08", notes: "Brown jack foal. 22kg. Breeder: Sardar Bugti, CNIC: 43501-9988776-2. Color: Brown. Farm: Suleiman Range Livestock, Dera Bugti.", recorded_by: "Sardar Bugti",     recorded_at: "2026-06-08T08:05:00Z" },
+  { id: "e49", animal_id: "BPP-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-12", notes: "Black & grey jenny foal. 19kg. Breeder: Ghulam Bolan, CNIC: 54601-1122334-7. Color: Black & Grey. Farm: Bolan Pass Pastures.", recorded_by: "Ghulam Bolan",     recorded_at: "2026-06-12T07:35:00Z" },
+  { id: "e50", animal_id: "BPP-DNK-202606-002", event_type: "Birth Registered", event_date: "2026-06-18", notes: "Light grey jack foal. 21kg. Breeder: Kiran Bolan, CNIC: 54601-2233445-9. Color: Light Grey. Farm: Bolan Pass Pastures.", recorded_by: "Kiran Bolan",      recorded_at: "2026-06-18T09:05:00Z" },
+  { id: "e51", animal_id: "BPP-DNK-202606-002", event_type: "Transfer to Farm",  event_date: "2026-06-28", notes: "Transferred in good condition. Previous owner: Kiran Bolan.", recorded_by: "Nasreen Mengal", previous_owner: "Kiran Bolan", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Bolan", recorded_at: "2026-06-28T10:00:00Z" },
+  { id: "e52", animal_id: "HOD-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-14", notes: "Cream white jack foal. 22kg. Breeder: Hamid Hingol, CNIC: 43101-8877665-4. Color: Cream White. Farm: Hingol Organic Dairy, Lasbela.", recorded_by: "Hamid Hingol",     recorded_at: "2026-06-14T08:05:00Z" },
+  { id: "e53", animal_id: "MCD-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-16", notes: "Brown jenny foal. 20kg. Breeder: Sardar Mehergarh, CNIC: 54601-6655443-1. Color: Brown. Farm: Mehergarh Cattle & Dairy, Bolan.", recorded_by: "Sardar Mehergarh", recorded_at: "2026-06-16T09:35:00Z" },
+  { id: "e54",  animal_id: "MCD-DNK-202606-001", event_type: "Transfer to Farm",   event_date: "2026-06-27", notes: "Good condition on arrival. Previous owner: Sardar Mehergarh.", recorded_by: "Nasreen Mengal", previous_owner: "Sardar Mehergarh", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm", recorded_at: "2026-06-27T10:00:00Z" },
+  { id: "e54b", animal_id: "MCD-DNK-202606-001", event_type: "Health Check",       event_date: "2026-06-27", notes: "Arrival health check. Weight 103kg. Temperature 38.1°C. No abnormalities. Approved for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-27T10:30:00Z" },
+  { id: "e55",  animal_id: "MCD-DNK-202606-001", event_type: "Quarantine Started", event_date: "2026-06-27", notes: "Quarantine started. Block A assigned.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-27T11:00:00Z" },
+  { id: "e56", animal_id: "MCD-DNK-202606-001", event_type: "Quarantine Ended",    event_date: "2026-06-28", notes: "Cleared all tests. Released.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-28T09:00:00Z" },
+  { id: "e57", animal_id: "SBB-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-20", notes: "Dark brown jack foal. 23kg. Breeder: Muhammad Sibi, CNIC: 42101-7766554-8. Color: Dark Brown. Farm: Sibi Bull Breeders.", recorded_by: "Muhammad Sibi",    recorded_at: "2026-06-20T07:05:00Z" },
+  { id: "e58", animal_id: "SBB-DNK-202606-002", event_type: "Birth Registered", event_date: "2026-06-22", notes: "Grey jenny foal. 20kg. Breeder: Aisha Sibi, CNIC: 42101-8877665-5. Color: Grey. Farm: Sibi Bull Breeders.", recorded_by: "Aisha Sibi",       recorded_at: "2026-06-22T08:05:00Z" },
+  { id: "e59",  animal_id: "SBB-DNK-202606-002", event_type: "Transfer to Farm",   event_date: "2026-06-28", notes: "Transferred in good condition. Previous owner: Aisha Sibi.", recorded_by: "Nasreen Mengal", previous_owner: "Aisha Sibi", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Sibi", recorded_at: "2026-06-28T10:00:00Z" },
+  { id: "e59b", animal_id: "SBB-DNK-202606-002", event_type: "Health Check",       event_date: "2026-06-28", notes: "Health check completed post-transfer. Weight 97kg. No signs of stress or illness. Cleared for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-28T10:30:00Z" },
+  { id: "e60",  animal_id: "SBB-DNK-202606-002", event_type: "Quarantine Started", event_date: "2026-06-28", notes: "Quarantine started. Block A.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-28T11:00:00Z" },
+  { id: "e61", animal_id: "RBF-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-24", notes: "Black jack foal. 22kg. Breeder: Raja Bhagnari, CNIC: 42101-5544332-9. Color: Black. Farm: Royal Bhagnari Farms, Sibi.", recorded_by: "Raja Bhagnari",    recorded_at: "2026-06-24T09:05:00Z" },
+  { id: "e62", animal_id: "LCB-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-15", notes: "Tan jenny foal. 19kg. Breeder: Haji Lohani, CNIC: 44201-3344556-6. Color: Tan. Farm: Lohani Cattle Breeders, Loralai.", recorded_by: "Haji Lohani",      recorded_at: "2026-06-15T08:35:00Z" },
+  { id: "e63", animal_id: "LCB-DNK-202606-001", event_type: "Transfer to Farm",  event_date: "2026-06-28", notes: "Transferred in good health. Previous owner: Haji Lohani.", recorded_by: "Nasreen Mengal", previous_owner: "Haji Lohani", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm", recorded_at: "2026-06-28T10:00:00Z" },
+  { id: "e64", animal_id: "BHL-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-17", notes: "Grey & brown jack foal. 21kg. Breeder: Sardar Baloch, CNIC: 54201-1133224-0. Color: Grey & Brown. Farm: Baloch Heritage Livestock, Kalat.", recorded_by: "Sardar Baloch",    recorded_at: "2026-06-17T07:05:00Z" },
+  { id: "e65", animal_id: "PBL-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-19", notes: "White & grey jenny foal. 20kg. Breeder: Pak Baloch CEO, CNIC: 54301-4455667-7. Color: White & Grey. Farm: Pak-Baloch Livestock Enterprise, Quetta.", recorded_by: "Pak Baloch CEO",   recorded_at: "2026-06-19T09:05:00Z" },
+  { id: "e66",  animal_id: "PBL-DNK-202606-001", event_type: "Transfer to Farm",   event_date: "2026-06-27", notes: "Good condition. Previous owner: Pak Baloch CEO.", recorded_by: "Nasreen Mengal", previous_owner: "Pak Baloch CEO", transfer_condition: "Healthy - Good condition", transferred_to: "Central Farm, Quetta", recorded_at: "2026-06-27T10:00:00Z" },
+  { id: "e66b", animal_id: "PBL-DNK-202606-001", event_type: "Health Check",       event_date: "2026-06-27", notes: "Health check on arrival. Weight 101kg. Vitals within normal range. No injuries. Cleared for quarantine.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-27T10:30:00Z" },
+  { id: "e67",  animal_id: "PBL-DNK-202606-001", event_type: "Quarantine Started", event_date: "2026-06-27", notes: "Quarantine started. Block A.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-27T11:00:00Z" },
+  { id: "e68", animal_id: "PBL-DNK-202606-001", event_type: "Quarantine Ended",    event_date: "2026-06-28", notes: "Cleared all checks. Released.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-28T09:00:00Z" },
+  { id: "e69", animal_id: "KSD-DNK-202606-001", event_type: "Birth Registered", event_date: "2026-06-21", notes: "Brown jack foal. 22kg. Breeder: Suleiman Khan, CNIC: 43501-6677889-3. Color: Brown. Farm: Koh-e-Suleiman Dairy Farm, Dera Bugti.", recorded_by: "Suleiman Khan",    recorded_at: "2026-06-21T08:05:00Z" },
 ];
 
 // ─── Data Service (easy to swap to Supabase) ─────────────────────────────────
@@ -336,7 +456,7 @@ function saveToStorage<T>(key: string, value: T) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
 }
 
-const DATA_VERSION = "v6"; // bump to force re-seed when schema changes
+const DATA_VERSION = "v12"; // bump to force re-seed when schema changes
 
 function useDataService() {
   const [animals, setAnimals] = useState<Animal[]>(() => {
@@ -344,6 +464,7 @@ function useDataService() {
       saveToStorage("mcf_data_version", DATA_VERSION);
       saveToStorage("mcf_animals", SEED_ANIMALS);
       saveToStorage("mcf_events", SEED_EVENTS);
+      saveToStorage("mcf_farms", SEED_FARMS);
       return SEED_ANIMALS;
     }
     return loadFromStorage("mcf_animals", SEED_ANIMALS);
@@ -351,6 +472,21 @@ function useDataService() {
   const [events, setEvents] = useState<AnimalEvent[]>(() =>
     loadFromStorage("mcf_events", SEED_EVENTS)
   );
+  const [farms, setFarms] = useState<RegisteredFarm[]>(() =>
+    loadFromStorage("mcf_farms", SEED_FARMS)
+  );
+  useEffect(() => { saveToStorage("mcf_farms", farms); }, [farms]);
+
+  const addFarm = useCallback((farm: Omit<RegisteredFarm, "id" | "created_at">) => {
+    const code = farm.code || farmCodeFromName(farm.name);
+    const newFarm: RegisteredFarm = { ...farm, code, id: `FARM-${Date.now()}`, created_at: new Date().toISOString() };
+    setFarms(prev => [newFarm, ...prev]);
+    return newFarm;
+  }, []);
+
+  const deleteFarm = useCallback((id: string) => {
+    setFarms(prev => prev.filter(f => f.id !== id));
+  }, []);
   const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
@@ -360,20 +496,22 @@ function useDataService() {
     saveToStorage("mcf_events", events);
   }, [events]);
 
-  // Counters per species+month for ID generation
-  const getNextCounter = useCallback((species: Species, yyyymm: string) => {
-    const prefix = `MCF-${SPECIES_META[species].code}-${yyyymm}-`;
+  // Counters per farm+month for ID generation
+  const getNextCounter = useCallback((farmCode: string, yyyymm: string) => {
+    const prefix = `${farmCode}-DNK-${yyyymm}-`;
     const existing = animals
       .filter(a => a.id.startsWith(prefix))
       .map(a => parseInt(a.id.split("-").pop() || "0", 10));
     return (existing.length > 0 ? Math.max(...existing) : 0) + 1;
   }, [animals]);
 
-  const addAnimal = useCallback((animal: Omit<Animal, "id" | "created_at">) => {
+  const addAnimal = useCallback((animal: Omit<Animal, "id" | "created_at">, farmList?: RegisteredFarm[]) => {
     const now = new Date();
     const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const counter = getNextCounter(animal.species, yyyymm);
-    const id = `MCF-${SPECIES_META[animal.species].code}-${yyyymm}-${String(counter).padStart(3, "0")}`;
+    const farm = (farmList || []).find(f => f.name === animal.registered_farm);
+    const farmCode = farm?.code || farmCodeFromName(animal.registered_farm || "TRK");
+    const counter = getNextCounter(farmCode, yyyymm);
+    const id = `${farmCode}-DNK-${yyyymm}-${String(counter).padStart(3, "0")}`;
     const newAnimal: Animal = { ...animal, id, created_at: now.toISOString() };
 
     const birthEvent: AnimalEvent = {
@@ -399,10 +537,11 @@ function useDataService() {
     const newEvent: AnimalEvent = { ...evt, id: `e${Date.now()}`, recorded_at: now.toISOString() };
 
     const statusMap: Partial<Record<EventType, AnimalStatus>> = {
-      "Transfer to MCF Farm":  "Transferred, Pending Quarantine",
-      "Quarantine Start":      "In Quarantine",
-      "Quarantine End":        "Cleared at Farm",
-      "Movement to Slaughter": "Sent to Slaughterhouse",
+      "Transfer to Farm":  "Transferred to Farm",
+      "Health Check":      "Health Checked",
+      "Quarantine Started":"In Quarantine",
+      "Quarantine Ended":  "Cleared at Farm",
+      "Slaughter":         "Sent to Slaughterhouse",
     };
     const newStatus = statusMap[evt.event_type];
 
@@ -427,9 +566,8 @@ function useDataService() {
         setEvents(evts => [{
           id: `e${Date.now()}`,
           animal_id: animalId,
-          event_type: "Other",
+          event_type: "Health Check",
           event_date: now.toISOString().split("T")[0],
-          location: a.birth_location,
           notes: `Status updated: ${a.status} → ${changes.status}`,
           recorded_by: recordedBy || "System",
           recorded_at: now.toISOString(),
@@ -439,7 +577,8 @@ function useDataService() {
     }));
   }, []);
 
-  return { animals, events, addAnimal, addEvent, updateAnimal, getAnimalEvents, isOnline, setIsOnline };
+  const addAnimalWithFarms = useCallback((animal: Omit<Animal, "id" | "created_at">) => addAnimal(animal, farms), [addAnimal, farms]);
+  return { animals, events, farms, addAnimal: addAnimalWithFarms, addEvent, updateAnimal, getAnimalEvents, addFarm, deleteFarm, isOnline, setIsOnline };
 }
 
 // ─── Data Context (shared across all pages) ───────────────────────────────────
@@ -805,10 +944,12 @@ function AnimalDetailPage({ canEdit, recordedBy, canRecordEvents, allowedEventTy
         <Card>
           <div className="grid grid-cols-2 gap-3 text-sm">
             {[
-              { label: "Breeder",       value: animal.breeder_name },
-              { label: "Birth Date",    value: formatDate(animal.birth_date) },
-              { label: "Birth Location",value: animal.birth_location },
-              { label: "Color",         value: animal.color },
+              { label: "Breeder (Owner)", value: animal.breeder_name },
+              { label: "Breeder CNIC",    value: animal.breeder_cnic || "—" },
+              { label: "Registered Farm", value: animal.registered_farm || "—" },
+              { label: "Birth Date",      value: formatDate(animal.birth_date) },
+              { label: "Birth Location",  value: animal.birth_location },
+              { label: "Color",           value: animal.color },
             ].map(({ label, value }) => (
               <div key={label}>
                 <p className="text-xs text-muted-foreground">{label}</p>
@@ -999,16 +1140,66 @@ function QuickEventForm({ animalId, status, addEvent, allowedEventTypes, onDone 
   const availableTypes = useMemo(() => allowedEventTypesForAnimal(status, allowedEventTypes), [status, allowedEventTypes]);
   const [eventType, setEventType] = useState<EventType>(availableTypes[0]);
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
-  const [location, setLocation] = useState("");
   const [notes, setNotes] = useState("");
+  const [saved, setSaved] = useState(false);
   const nextStatus = NEXT_STATUS[status];
+
+  const downloadQR = () => {
+    const canvas = document.querySelector<HTMLCanvasElement>("#event-qr-canvas canvas");
+    if (!canvas) return;
+    const url = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${animalId}-event-qr.png`;
+    a.click();
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!location) return;
-    addEvent({ animal_id: animalId, event_type: eventType, event_date: date, location, notes, recorded_at: new Date().toISOString() });
-    onDone();
+    addEvent({ animal_id: animalId, event_type: eventType, event_date: date, notes, recorded_at: new Date().toISOString() });
+    setSaved(true);
   };
+
+  if (saved) {
+    return (
+      <div className="px-4 py-5 flex flex-col items-center gap-4">
+        <div className="w-12 h-12 rounded-full flex items-center justify-center bg-green-100">
+          <CheckCircle2 size={24} className="text-green-600" />
+        </div>
+        <div className="text-center">
+          <p className="font-bold text-foreground text-sm" style={{ fontFamily: "Montserrat, sans-serif" }}>Event Saved!</p>
+          <p className="text-xs text-muted-foreground mt-0.5">{eventType} · {date}</p>
+        </div>
+
+        <div id="event-qr-canvas" className="flex flex-col items-center gap-3">
+          <div className="p-3 bg-white border-2 border-border rounded-xl shadow-sm">
+            <QRCodeCanvas value={animalId} size={180} level="H" includeMargin={false} />
+          </div>
+          <p className="font-mono text-xs text-center bg-muted px-3 py-1.5 rounded-lg text-foreground">{animalId}</p>
+          <p className="text-[11px] text-muted-foreground text-center">Scan to view this animal's full trace history</p>
+        </div>
+
+        <div className="flex gap-2 w-full">
+          <button onClick={downloadQR}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border text-sm font-semibold hover:bg-muted transition-colors"
+            style={{ fontFamily: "Montserrat, sans-serif" }}>
+            <Download size={15} /> Download
+          </button>
+          <button onClick={() => window.print()}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border border-border text-sm font-semibold hover:bg-muted transition-colors"
+            style={{ fontFamily: "Montserrat, sans-serif" }}>
+            <Printer size={15} /> Print
+          </button>
+        </div>
+
+        <button onClick={onDone}
+          className="w-full py-2.5 rounded-lg text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+          style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
+          Done
+        </button>
+      </div>
+    );
+  }
 
   return (
     <form onSubmit={handleSubmit} className="px-4 py-3 space-y-3">
@@ -1032,13 +1223,9 @@ function QuickEventForm({ animalId, status, addEvent, allowedEventTypes, onDone 
         </div>
       </div>
       <div>
-        <label className="text-xs font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Location *</label>
-        <input className={cn(inputCls, "mt-1")} placeholder="Where did this happen?" required
-          value={location} onChange={e => setLocation(e.target.value)} />
-      </div>
-      <div>
         <label className="text-xs font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Notes</label>
         <input className={cn(inputCls, "mt-1")} placeholder="Optional observations…"
+          autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
           value={notes} onChange={e => setNotes(e.target.value)} />
       </div>
       <button type="submit"
@@ -1074,7 +1261,7 @@ function Dashboard({ animals, events, isOnline, onAnimalClick, onStatusClick }: 
 
   const WORKFLOW_STEPS: { status: AnimalStatus; icon: typeof CheckCircle2; gradient: string; sub: string }[] = [
     { status: "Registered at Breeder's Farm",    icon: User,           gradient: "var(--gradient-brand)", sub: "Pre-transfer" },
-    { status: "Transferred, Pending Quarantine", icon: ArrowRightLeft, gradient: "var(--gradient-primary)", sub: "En route to farm" },
+    { status: "Transferred to Farm", icon: ArrowRightLeft, gradient: "var(--gradient-primary)", sub: "En route to farm" },
     { status: "In Quarantine",                   icon: AlertTriangle,  gradient: "var(--gradient-impact)", sub: "Awaiting clearance" },
     { status: "Cleared at Farm",                 icon: CheckCircle2,   gradient: "linear-gradient(135deg,#2FB572 0%,#1d8a52 100%)", sub: "Healthy & settled" },
     { status: "Sent to Slaughterhouse",          icon: Skull,          gradient: "linear-gradient(135deg,#d4183d 0%,#9b1228 100%)", sub: "Final movement" },
@@ -1087,14 +1274,10 @@ function Dashboard({ animals, events, isOnline, onAnimalClick, onStatusClick }: 
   return (
     <div>
       {/* Header — hidden on desktop (sidebar + topbar handle branding) */}
-      <div className="md:hidden px-4 pt-5 pb-6 farm-bg-pattern-light" style={{ background: "var(--gradient-primary)" }}>
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-white/70 text-xs font-medium tracking-wide uppercase" style={{ fontFamily: "Montserrat, sans-serif" }}>
-              Makuran Cattle Farm
-            </p>
-            <h1 className="text-white text-xl font-bold mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>Track Now</h1>
-            <p className="text-white/60 text-xs mt-0.5">Livestock Traceability Platform</p>
+      <div className="md:hidden px-4 pt-4 pb-6 farm-bg-pattern-light" style={{ background: "var(--gradient-primary)" }}>
+        <div className="flex items-center justify-between">
+          <div className="inline-flex items-center bg-white rounded-xl px-3 py-2 shadow-md">
+            <img src="/logo.png" alt="Track Now" className="h-8 w-auto object-contain" />
           </div>
           <div className={cn(
             "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold",
@@ -1108,48 +1291,35 @@ function Dashboard({ animals, events, isOnline, onAnimalClick, onStatusClick }: 
 
       <div className="px-4 md:px-6 -mt-3 md:mt-0 md:pt-6 space-y-4 md:space-y-6 pb-6">
 
-        {/* Total Animals — big box with per-species breakdown inside */}
-        <div className="rounded-xl p-4 md:p-5 text-white shadow-sm" style={{ background: "var(--gradient-primary)" }}>
-          <div className="flex items-start justify-between">
-            <div>
-              <Activity size={20} strokeWidth={1.5} className="opacity-80 mb-2" />
-              <p className="text-2xl md:text-3xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>{stats.total}</p>
-              <p className="text-xs font-semibold opacity-90 mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>Total Animals</p>
-              <p className="text-xs opacity-60 mt-0.5">Across all species</p>
-            </div>
-          </div>
-          {/* Categorized breakdown by breed/species */}
-          <div className="mt-4 pt-4 border-t border-white/15 grid grid-cols-3 md:grid-cols-5 gap-2">
-            {(Object.entries(speciesCounts) as [Species, number][]).map(([sp, cnt]) => (
-              <div key={sp} className="flex items-center gap-2 bg-white/10 rounded-lg px-2.5 py-2">
-                <span className="text-base">{SPECIES_META[sp].emoji}</span>
-                <div className="min-w-0">
-                  <p className="text-sm font-bold leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>{cnt}</p>
-                  <p className="text-[10px] opacity-75 truncate leading-tight">{SPECIES_META[sp].label}</p>
-                </div>
+        {/* Merged: Total Donkeys + Lifecycle Workflow */}
+        <div className="rounded-2xl overflow-hidden shadow-md" style={{ background: "var(--gradient-primary)" }}>
+          {/* Top: total count */}
+          <div className="flex items-center justify-between px-4 pt-4 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center">
+                <span className="text-xl">🫏</span>
               </div>
-            ))}
+              <div>
+                <p className="text-[11px] text-white/60 uppercase tracking-widest" style={{ fontFamily: "Montserrat, sans-serif" }}>Total Donkeys</p>
+                <p className="text-2xl font-bold text-white leading-none" style={{ fontFamily: "Montserrat, sans-serif" }}>{stats.total}</p>
+              </div>
+            </div>
+            <p className="text-[10px] text-white/40 text-right">Registered<br/>in system</p>
           </div>
-        </div>
-
-        {/* Lifecycle workflow: all 5 statuses in order, with live counts */}
-        <div>
-          <h2 className="text-sm font-bold text-foreground mb-3" style={{ fontFamily: "Montserrat, sans-serif" }}>Lifecycle Workflow</h2>
-          <div className="flex md:grid md:grid-cols-5 gap-2 md:gap-3 overflow-x-auto pb-1 scrollbar-hide">
-            {WORKFLOW_STEPS.map(({ status, icon: Icon, gradient, sub }, i) => (
-              <div key={status} className="flex items-center flex-shrink-0 md:contents">
+          {/* Divider */}
+          <div className="mx-4 h-px bg-white/10" />
+          {/* Bottom: workflow pills */}
+          <div className="flex gap-1.5 px-3 py-3 overflow-x-auto scrollbar-hide">
+            {WORKFLOW_STEPS.map(({ status, icon: Icon, gradient }, i) => (
+              <div key={status} className="flex items-center flex-shrink-0">
                 <button onClick={() => onStatusClick(status)}
-                  className="rounded-xl p-3 md:p-4 text-white shadow-sm min-w-[120px] md:min-w-0 text-left hover:opacity-90 active:scale-[0.98] transition-all"
+                  className="flex flex-col items-center justify-center rounded-xl px-3 py-2 min-w-[62px] hover:opacity-90 active:scale-95 transition-all"
                   style={{ background: gradient }}>
-                  <Icon size={18} strokeWidth={1.5} className="opacity-80 mb-1.5 md:mb-2" />
-                  <p className="text-xl md:text-2xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>{workflowCounts[status] || 0}</p>
-                  <p className="text-[11px] md:text-xs font-semibold opacity-90 mt-0.5 leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                    {STATUS_META[status].label}
-                  </p>
-                  <p className="hidden md:block text-[11px] opacity-60 mt-0.5">{sub}</p>
+                  <p className="text-base font-bold text-white leading-none" style={{ fontFamily: "Montserrat, sans-serif" }}>{workflowCounts[status] || 0}</p>
+                  <p className="text-[9px] text-white/80 mt-0.5 text-center leading-tight whitespace-nowrap">{STATUS_META[status].label}</p>
                 </button>
                 {i < WORKFLOW_STEPS.length - 1 && (
-                  <ChevronRight size={16} className="text-muted-foreground flex-shrink-0 mx-1 md:hidden" />
+                  <ChevronRight size={12} className="text-white/25 mx-0.5 flex-shrink-0" />
                 )}
               </div>
             ))}
@@ -1225,14 +1395,17 @@ function Dashboard({ animals, events, isOnline, onAnimalClick, onStatusClick }: 
 
 // ─── Register Tab ─────────────────────────────────────────────────────────────
 
-function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
+function RegisterAnimal({ addAnimal, updateAnimal, recordedBy, farms }: {
+  farms: RegisteredFarm[];
   addAnimal: ReturnType<typeof useDataService>["addAnimal"];
   updateAnimal: ReturnType<typeof useDataService>["updateAnimal"];
   recordedBy: string;
 }) {
-  const [species, setSpecies] = useState<Species>("cattle");
+  const [species] = useState<Species>("donkey");
   const [form, setForm] = useState({
     breeder_name: "",
+    breeder_cnic: "",
+    registered_farm: "",
     birth_date: new Date().toISOString().split("T")[0],
     birth_location: "",
     birth_lat: undefined as number | undefined,
@@ -1292,7 +1465,7 @@ function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
   const reset = () => {
     setSubmitted(null);
     setShowQR(false);
-    setForm({ breeder_name: "", birth_date: new Date().toISOString().split("T")[0], birth_location: "", birth_lat: undefined, birth_lng: undefined, gender: "Male", color: "", notes: "" });
+    setForm({ breeder_name: "", breeder_cnic: "", registered_farm: "", birth_date: new Date().toISOString().split("T")[0], birth_location: "", birth_lat: undefined, birth_lng: undefined, gender: "Male", color: "", notes: "" });
   };
 
   if (submitted) {
@@ -1360,18 +1533,22 @@ function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
               </InputField>
               <InputField label="Breeder Name">
                 <input className={inputCls} value={editForm.breeder_name}
+                  autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
                   onChange={e => setEditForm(f => f && ({ ...f, breeder_name: e.target.value }))} />
               </InputField>
               <InputField label="Breeder Location / Village">
                 <input className={inputCls} value={editForm.birth_location}
+                  autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
                   onChange={e => setEditForm(f => f && ({ ...f, birth_location: e.target.value }))} />
               </InputField>
               <InputField label="Color / Markings">
                 <input className={inputCls} value={editForm.color}
+                  autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
                   onChange={e => setEditForm(f => f && ({ ...f, color: e.target.value }))} />
               </InputField>
               <InputField label="Notes">
                 <textarea className={cn(inputCls, "resize-none min-h-[70px]")} rows={2}
+                  autoComplete="off" spellCheck={false}
                   value={editForm.notes}
                   onChange={e => setEditForm(f => f && ({ ...f, notes: e.target.value }))} />
               </InputField>
@@ -1396,18 +1573,29 @@ function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
         <p className="text-white/60 text-xs mt-0.5">Record a newly born animal at a breeder farm</p>
       </div>
       <form onSubmit={handleSubmit} className="px-4 md:px-0 py-4 space-y-4 pb-8 md:max-w-2xl md:mx-auto md:px-8 md:py-8">
-        {/* Species */}
-        <InputField label="Species">
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-            {SPECIES_LIST.map(sp => (
-              <SpeciesChip key={sp} species={sp} active={species === sp} onClick={() => setSpecies(sp)} />
-            ))}
-          </div>
+        <InputField label="Breeder Name (Owner)" required>
+          <input className={inputCls} placeholder="e.g. Muhammad Saleem" required
+            autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+            value={form.breeder_name} onChange={e => setForm(f => ({ ...f, breeder_name: e.target.value }))} />
         </InputField>
 
-        <InputField label="Breeder Name" required>
-          <input className={inputCls} placeholder="e.g. GreenMeadow" required
-            value={form.breeder_name} onChange={e => setForm(f => ({ ...f, breeder_name: e.target.value }))} />
+        <InputField label="Breeder CNIC">
+          <input className={inputCls} placeholder="XXXXX-XXXXXXX-X" maxLength={15}
+            autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} inputMode="numeric"
+            value={form.breeder_cnic} onChange={e => setForm(f => ({ ...f, breeder_cnic: maskCnic(e.target.value) }))} />
+        </InputField>
+
+        <InputField label="Registered Farm">
+          <select className={inputCls} value={form.registered_farm}
+            onChange={e => setForm(f => ({ ...f, registered_farm: e.target.value }))}>
+            <option value="">— Select a farm —</option>
+            {farms.map(farm => (
+              <option key={farm.id} value={farm.name}>{farm.name}</option>
+            ))}
+          </select>
+          {farms.length === 0 && (
+            <p className="text-[11px] text-muted-foreground mt-1">No farms registered yet. Ask your administrator to add farms first.</p>
+          )}
         </InputField>
 
         <InputField label="Birth Date" required>
@@ -1417,6 +1605,7 @@ function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
 
         <InputField label="Breeder Location / Village" required>
           <input className={inputCls} placeholder="e.g. Turbat, Kech District" required
+            autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
             value={form.birth_location} onChange={e => setForm(f => ({ ...f, birth_location: e.target.value }))} />
           <button type="button" onClick={captureGPS}
             className="flex items-center gap-1.5 mt-1 text-accent text-xs font-semibold"
@@ -1436,12 +1625,13 @@ function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
 
         <InputField label="Color / Markings">
           <input className={inputCls} placeholder={sm.colorHint}
+            autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
             value={form.color} onChange={e => setForm(f => ({ ...f, color: e.target.value }))} />
         </InputField>
 
         <InputField label="Notes (Optional)">
           <textarea className={cn(inputCls, "resize-none min-h-[80px]")} rows={3}
-            placeholder="Any observations at birth…"
+            placeholder="Any observations at birth…" autoComplete="off" spellCheck={false}
             value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
         </InputField>
 
@@ -1456,14 +1646,21 @@ function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
 }
 
 // ─── Activities Tab ───────────────────────────────────────────────────────────
-// Read-only feed of every lifecycle event across all animals, organized by
-// breed/species first, newest activity first within each breed.
-// Adding events still happens per-animal on the detail page.
+
+// Workflow stages in display order
+const WORKFLOW_STAGES: EventType[] = [
+  "Birth Registered",
+  "Transfer to Farm",
+  "Health Check",
+  "Quarantine Started",
+  "Quarantine Ended",
+  "Slaughter",
+];
 
 function ActivitiesFeed({ animals, events, onAnimalClick }: {
   animals: Animal[]; events: AnimalEvent[]; onAnimalClick: (a: Animal) => void;
 }) {
-  const [speciesFilter, setSpeciesFilter] = useState<Species | "all">("all");
+  const [stageFilter, setStageFilter] = useState<EventType | "all">("all");
 
   const animalById = useMemo(() => {
     const map = new Map<string, Animal>();
@@ -1471,79 +1668,104 @@ function ActivitiesFeed({ animals, events, onAnimalClick }: {
     return map;
   }, [animals]);
 
-  // Group every event by the species/breed of the animal it belongs to
-  const groupsBySpecies = useMemo(() => {
-    const map = new Map<Species, AnimalEvent[]>();
+  // Group events by their event_type (workflow stage), newest first within each group
+  const groupsByStage = useMemo(() => {
+    const map = new Map<EventType, AnimalEvent[]>();
     events.forEach(evt => {
-      const animal = animalById.get(evt.animal_id);
-      if (!animal) return;
-      if (!map.has(animal.species)) map.set(animal.species, []);
-      map.get(animal.species)!.push(evt);
+      if (!WORKFLOW_STAGES.includes(evt.event_type as EventType)) return;
+      if (!map.has(evt.event_type as EventType)) map.set(evt.event_type as EventType, []);
+      map.get(evt.event_type as EventType)!.push(evt);
     });
     map.forEach(list => list.sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime()));
-    return SPECIES_LIST
-      .filter(sp => map.has(sp) && (speciesFilter === "all" || speciesFilter === sp))
-      .map(sp => ({ species: sp, evts: map.get(sp)! }));
-  }, [events, animalById, speciesFilter]);
+    return WORKFLOW_STAGES
+      .filter(stage => map.has(stage) && (stageFilter === "all" || stageFilter === stage))
+      .map(stage => ({ stage, evts: map.get(stage)! }));
+  }, [events, stageFilter]);
 
-  const presentSpecies = useMemo(() => {
-    const s = new Set(animals.map(a => a.species));
-    return SPECIES_LIST.filter(sp => s.has(sp));
-  }, [animals]);
+  const presentStages = useMemo(() => {
+    const s = new Set(events.map(e => e.event_type));
+    return WORKFLOW_STAGES.filter(stage => s.has(stage));
+  }, [events]);
 
   return (
     <div>
       <div className="px-4 pt-5 pb-4 md:hidden" style={{ background: "var(--gradient-primary)" }}>
         <h1 className="text-white text-lg font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>Activities</h1>
-        <p className="text-white/60 text-xs mt-0.5">Lifecycle events grouped by breed, newest first</p>
+        <p className="text-white/60 text-xs mt-0.5">Events grouped by lifecycle stage</p>
       </div>
       <div className="hidden md:block px-6 pt-6 pb-2">
         <h1 className="text-foreground text-xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>Activities</h1>
-        <p className="text-muted-foreground text-sm mt-0.5">Lifecycle events grouped by breed, newest first</p>
+        <p className="text-muted-foreground text-sm mt-0.5">Events grouped by lifecycle stage</p>
       </div>
 
-      {/* Species filter */}
+      {/* Stage filter pills */}
       <div className="flex gap-2 px-4 md:px-6 py-3 overflow-x-auto scrollbar-hide border-b border-border">
         <button
-          onClick={() => setSpeciesFilter("all")}
+          onClick={() => setStageFilter("all")}
           className={cn(
-            "px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all",
-            speciesFilter === "all" ? "text-white" : "bg-white border border-border text-foreground hover:bg-muted"
+            "px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0",
+            stageFilter === "all" ? "text-white" : "bg-white border border-border text-foreground hover:bg-muted"
           )}
-          style={{ fontFamily: "Montserrat, sans-serif", background: speciesFilter === "all" ? "var(--gradient-primary)" : undefined }}>
+          style={{ fontFamily: "Montserrat, sans-serif", background: stageFilter === "all" ? "var(--gradient-primary)" : undefined }}>
           All ({events.length})
         </button>
-        {presentSpecies.map(sp => (
-          <SpeciesChip key={sp} species={sp}
-            active={speciesFilter === sp}
-            onClick={() => setSpeciesFilter(speciesFilter === sp ? "all" : sp)} />
-        ))}
+        {presentStages.map(stage => {
+          const em = EVENT_META[stage];
+          const Icon = em.icon;
+          const count = events.filter(e => e.event_type === stage).length;
+          const active = stageFilter === stage;
+          return (
+            <button key={stage}
+              onClick={() => setStageFilter(active ? "all" : stage)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 border",
+                active ? "text-white border-transparent" : "bg-white border-border text-foreground hover:bg-muted"
+              )}
+              style={{
+                fontFamily: "Montserrat, sans-serif",
+                background: active ? em.color : undefined,
+              }}>
+              <Icon size={11} />
+              {stage} <span className="opacity-70">({count})</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="px-4 md:px-6 py-3 pb-8 space-y-6">
-        {groupsBySpecies.length === 0 && (
+        {groupsByStage.length === 0 && (
           <div className="text-center py-12 text-muted-foreground text-sm">No activity yet</div>
         )}
-        {groupsBySpecies.map(({ species, evts }) => {
-          const sm = SPECIES_META[species];
+        {groupsByStage.map(({ stage, evts }) => {
+          const em = EVENT_META[stage];
+          const Icon = em.icon;
+          const stepNum = WORKFLOW_STAGES.indexOf(stage) + 1;
           return (
-            <div key={species}>
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-lg">{sm.emoji}</span>
-                <h2 className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                  {sm.label}
-                </h2>
-                <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full"
-                  style={{ fontFamily: "Montserrat, sans-serif" }}>
-                  {evts.length} {evts.length === 1 ? "activity" : "activities"}
-                </span>
+            <div key={stage}>
+              {/* Stage header */}
+              <div className="flex items-center gap-2.5 mb-3">
+                <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{ backgroundColor: em.color + "20" }}>
+                  <Icon size={14} style={{ color: em.color }} />
+                </div>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded text-white flex-shrink-0"
+                    style={{ backgroundColor: em.color, fontFamily: "Montserrat, sans-serif" }}>
+                    STEP {stepNum}
+                  </span>
+                  <h2 className="text-sm font-bold text-foreground truncate" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                    {stage}
+                  </h2>
+                  <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full flex-shrink-0"
+                    style={{ fontFamily: "Montserrat, sans-serif" }}>
+                    {evts.length}
+                  </span>
+                </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pl-0">
                 {evts.map(evt => {
                   const animal = animalById.get(evt.animal_id);
                   if (!animal) return null;
-                  const em = EVENT_META[evt.event_type];
-                  const Icon = em.icon;
                   return (
                     <Card key={evt.id} onClick={() => onAnimalClick(animal)} className="flex items-start gap-3">
                       <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -1552,22 +1774,21 @@ function ActivitiesFeed({ animals, events, onAnimalClick }: {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                            {evt.event_type}
+                          <p className="text-sm font-bold text-foreground truncate" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                            {animal.id}
                           </p>
                           <p className="text-[10px] text-muted-foreground flex-shrink-0">
-                            {formatDate(evt.event_date)} · {new Date(evt.recorded_at).toLocaleTimeString("en-PK", { hour: "numeric", minute: "2-digit" })}
+                            {formatDate(evt.event_date)}
                           </p>
                         </div>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                          <span className="font-mono">{animal.id}</span>
-                          <span>· {animal.breeder_name}</span>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {animal.breeder_name} · {animal.gender === "Male" ? "Jack" : "Jenny"} · {animal.color}
                         </p>
                         <p className="text-xs text-accent font-semibold flex items-center gap-1 mt-0.5">
                           <User size={11} /> {evt.recorded_by}
                         </p>
                         {evt.notes && (
-                          <p className="text-xs text-muted-foreground mt-0.5 italic">"{evt.notes}"</p>
+                          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 italic">"{evt.notes}"</p>
                         )}
                       </div>
                     </Card>
@@ -1938,10 +2159,10 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
 
   return (
     <div className="bg-background md:min-h-screen md:flex">
-      {/* Mobile layout — unchanged */}
+      {/* Mobile layout */}
       <div className="flex flex-col md:hidden">
       {/* Hero header */}
-      <div className="flex-shrink-0 px-6 pt-12 pb-10 text-white relative overflow-hidden farm-bg-pattern-light"
+      <div className="flex-shrink-0 px-6 pt-10 pb-10 text-white relative overflow-hidden farm-bg-pattern-light"
         style={{ background: "var(--gradient-primary)" }}>
         {/* Decorative rings */}
         <div className="absolute -right-12 -top-12 w-48 h-48 rounded-full border border-white/10" />
@@ -1949,25 +2170,14 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
         <div className="absolute right-6 top-6 w-16 h-16 rounded-full bg-white/5" />
 
         <div className="relative">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-              style={{ background: "var(--gradient-impact)" }}>
-              <AppLogoIcon size={20} />
-            </div>
-            <div>
-              <p className="text-white/60 text-xs font-medium" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                Makuran Cattle Farm
-              </p>
-              <p className="text-white font-bold text-base leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                Track Now
-              </p>
-            </div>
+          <div className="inline-flex items-center bg-white rounded-xl px-4 py-2.5 shadow-md mb-5">
+            <img src="/logo.png" alt="Track Now" className="h-9 w-auto object-contain" />
           </div>
           <h1 className="text-2xl font-bold leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
             Welcome back
           </h1>
-          <p className="text-white/60 text-sm mt-1">
-            Sign in to access your livestock traceability dashboard
+          <p className="text-white/70 text-sm mt-1">
+            Sign in to your traceability dashboard
           </p>
         </div>
       </div>
@@ -2100,7 +2310,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
         </div>
 
         <p className="text-center text-xs text-muted-foreground pb-4">
-          Track Now · Makuran Cattle Farm · v1.0
+          Track Now · v1.0
         </p>
       </div>
       </div>
@@ -2112,21 +2322,6 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
           <div className="absolute -right-24 -top-24 w-96 h-96 rounded-full border border-white/10" />
           <div className="absolute -right-8 -top-8 w-64 h-64 rounded-full border border-white/10" />
           <div className="absolute right-12 top-12 w-32 h-32 rounded-full bg-white/5" />
-
-          <div className="relative flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center"
-              style={{ background: "var(--gradient-impact)" }}>
-              <AppLogoIcon size={24} />
-            </div>
-            <div>
-              <p className="text-white/60 text-xs font-medium" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                Makuran Cattle Farm
-              </p>
-              <p className="text-white font-bold text-lg leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                Track Now
-              </p>
-            </div>
-          </div>
 
           <div className="relative max-w-md">
             <h1 className="text-4xl font-bold leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
@@ -2146,23 +2341,14 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
             </div>
           </div>
 
-          <p className="relative text-white/40 text-xs">Track Now · Makuran Cattle Farm · v1.0</p>
+          <p className="relative text-white/40 text-xs">Track Now · v1.0</p>
         </div>
 
         <div className="flex-1 flex items-center justify-center px-6 py-10 overflow-y-auto md:max-h-screen">
           <div className="w-full max-w-md">
-            <div className="mb-6 lg:hidden flex items-center gap-2">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{ background: "var(--gradient-impact)" }}>
-                <AppLogoIcon size={20} />
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs font-medium" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                  Makuran Cattle Farm
-                </p>
-                <p className="text-foreground font-bold text-base leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                  Track Now
-                </p>
+            <div className="mb-8">
+              <div className="inline-flex items-center border border-border rounded-2xl px-5 py-3 shadow-sm bg-white">
+                <img src="/logo.png" alt="Track Now" className="h-11 w-auto object-contain" />
               </div>
             </div>
 
@@ -2267,7 +2453,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
             </div>
 
             <p className="text-center text-xs text-muted-foreground mt-6">
-              Track Now · Makuran Cattle Farm · v1.0
+              Track Now · v1.0
             </p>
           </div>
         </div>
@@ -2422,21 +2608,37 @@ function ProfileScreen({ user, onLogout, onPasswordChange, isFullscreen, toggleF
           )}
         </div>
 
-        {/* Reports shortcut (moved from nav) */}
-        {rm.canViewReports && (
-          <button onClick={() => navigate("/reports")}
-            className="w-full flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3.5 hover:shadow-md transition-shadow text-left">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: "var(--gradient-impact)" }}>
-              <BarChart2 size={18} className="text-white" strokeWidth={1.5} />
-            </div>
-            <div className="flex-1">
-              <p className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Reports & Analytics</p>
-              <p className="text-xs text-muted-foreground">Charts, species breakdown, and data export</p>
-            </div>
-            <ChevronRight2 size={16} className="text-muted-foreground flex-shrink-0" />
-          </button>
-        )}
+        {/* Quick links */}
+        <div className="space-y-2">
+          {rm.canViewReports && (
+            <button onClick={() => navigate("/reports")}
+              className="w-full flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3.5 hover:shadow-md transition-shadow text-left">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: "var(--gradient-impact)" }}>
+                <BarChart2 size={18} className="text-white" strokeWidth={1.5} />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Reports & Analytics</p>
+                <p className="text-xs text-muted-foreground">Charts, species breakdown, and data export</p>
+              </div>
+              <ChevronRight2 size={16} className="text-muted-foreground flex-shrink-0" />
+            </button>
+          )}
+          {user.role === "administrator" && (
+            <button onClick={() => navigate("/farms")}
+              className="w-full flex items-center gap-3 bg-card border border-border rounded-xl px-4 py-3.5 hover:shadow-md transition-shadow text-left">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: "var(--gradient-primary)" }}>
+                <Building2 size={18} className="text-white" strokeWidth={1.5} />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Registered Farms</p>
+                <p className="text-xs text-muted-foreground">Manage breeder farms and owners</p>
+              </div>
+              <ChevronRight2 size={16} className="text-muted-foreground flex-shrink-0" />
+            </button>
+          )}
+        </div>
 
         {/* Settings actions */}
         <div className="rounded-xl overflow-hidden border border-border">
@@ -2466,7 +2668,7 @@ function ProfileScreen({ user, onLogout, onPasswordChange, isFullscreen, toggleF
         <div className="rounded-xl border border-border px-4 py-3 flex items-center justify-between">
           <div>
             <p className="text-xs font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Track Now</p>
-            <p className="text-xs text-muted-foreground">Makuran Cattle Farm · v1.0</p>
+            <p className="text-xs text-muted-foreground">Track Now · v1.0</p>
           </div>
           <span className="text-[10px] px-2 py-1 rounded-full bg-muted text-muted-foreground font-semibold"
             style={{ fontFamily: "Montserrat, sans-serif" }}>Production</span>
@@ -2491,6 +2693,7 @@ const ROUTE_TO_TAB: Record<string, Tab> = {
   "/activities":  "activities",
   "/scan":        "search",
   "/reports":     "reports",
+  "/farms":       "farms",
   "/profile":     "profile",
 };
 const TAB_TO_ROUTE: Record<Tab, string> = {
@@ -2499,6 +2702,7 @@ const TAB_TO_ROUTE: Record<Tab, string> = {
   activities: "/activities",
   search:     "/scan",
   reports:    "/reports",
+  farms:      "/farms",
   profile:    "/profile",
 };
 
@@ -2509,7 +2713,7 @@ const LEFT_NAV:  { tab: Tab; path: string; icon: typeof LayoutDashboard; label: 
 ];
 const RIGHT_NAV: { tab: Tab; path: string; icon: typeof LayoutDashboard; label: string }[] = [
   { tab: "search",  path: "/scan",    icon: Search, label: "Scan" },
-  { tab: "profile", path: "/profile", icon: Users,  label: "Profile" },
+  { tab: "profile", path: "/profile", icon: Users,  label: "More" },
 ];
 
 const GLOBAL_STYLES = `
@@ -2529,6 +2733,545 @@ const GLOBAL_STYLES = `
   }
 `;
 
+// ─── Farms Management Page ────────────────────────────────────────────────────
+
+// ─── Location Search (OpenStreetMap Nominatim) ───────────────────────────────
+
+interface NominatimResult {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+}
+
+function LocationSearch({ value, onChange }: {
+  value: string;
+  onChange: (loc: { label: string; lat: number; lng: number }) => void;
+}) {
+  const [query, setQuery] = useState(value);
+  const [results, setResults] = useState<NominatimResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const search = (q: string) => {
+    setQuery(q);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!q.trim() || q.length < 3) { setResults([]); setOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1`,
+          { headers: { "Accept-Language": "en" } }
+        );
+        const data: NominatimResult[] = await res.json();
+        setResults(data);
+        setOpen(true);
+      } catch { /* network error — silently ignore */ }
+      finally { setLoading(false); }
+    }, 500);
+  };
+
+  const select = (r: NominatimResult) => {
+    const label = r.display_name;
+    setQuery(label);
+    setResults([]);
+    setOpen(false);
+    onChange({ label, lat: parseFloat(r.lat), lng: parseFloat(r.lon) });
+  };
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <MapPin size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        <input
+          className={cn(inputCls, "pl-8 pr-8")}
+          placeholder="Search address or place…"
+          value={query}
+          onChange={e => search(e.target.value)}
+          onFocus={() => results.length > 0 && setOpen(true)}
+          autoComplete="off"
+        />
+        {loading && (
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        )}
+      </div>
+      {open && results.length > 0 && (
+        <div className="absolute z-50 mt-1 w-full bg-white border border-border rounded-xl shadow-lg overflow-hidden">
+          {results.map(r => (
+            <button key={r.place_id} type="button"
+              className="w-full text-left px-3 py-2.5 hover:bg-muted border-b border-border last:border-0 transition-colors"
+              onClick={() => select(r)}>
+              <p className="text-xs font-medium text-foreground line-clamp-1">{r.display_name}</p>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FarmsManagement({ animals }: { animals: Animal[] }) {
+  const { farms, addFarm, deleteFarm, addAnimal } = useData();
+  const navigate = useNavigate();
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: "", location: "", lat: undefined as number | undefined, lng: undefined as number | undefined, owner_name: "", owner_cnic: "", phone: "" });
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [selectedFarm, setSelectedFarm] = useState<RegisteredFarm | null>(null);
+  const [showMapEmbed, setShowMapEmbed] = useState(false);
+  const [showRegisterDonkey, setShowRegisterDonkey] = useState(false);
+  const [donkeyForm, setDonkeyForm] = useState({ birth_date: "", breeder_name: "", breeder_cnic: "", birth_location: "", gender: "Male" as "Male" | "Female", color: "", notes: "" });
+  const [importError, setImportError] = useState("");
+
+  const handleAdd = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.owner_name) return;
+    addFarm(form);
+    setForm({ name: "", location: "", lat: undefined, lng: undefined, owner_name: "", owner_cnic: "", phone: "" });
+    setShowForm(false);
+  };
+
+  // ── Farm Detail View ──────────────────────────────────────────────────────
+  if (selectedFarm) {
+    const farmAnimals = animals.filter(a => a.registered_farm === selectedFarm.name);
+    const uniqueBreeders = Array.from(new Set(farmAnimals.map(a => a.breeder_name)));
+    const statusCounts = farmAnimals.reduce((acc, a) => { acc[a.status] = (acc[a.status] || 0) + 1; return acc; }, {} as Record<string, number>);
+    const mapsUrl = selectedFarm.lat ? `https://www.google.com/maps?q=${selectedFarm.lat},${selectedFarm.lng}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedFarm.location)}`;
+    const embedUrl = selectedFarm.lat ? `https://maps.google.com/maps?q=${selectedFarm.lat},${selectedFarm.lng}&z=14&output=embed` : `https://maps.google.com/maps?q=${encodeURIComponent(selectedFarm.location)}&z=14&output=embed`;
+
+    const handleImportCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+      setImportError("");
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const text = ev.target?.result as string;
+          const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+          if (lines.length < 2) { setImportError("File has no data rows."); return; }
+          const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+          let imported = 0;
+          for (let i = 1; i < lines.length; i++) {
+            const vals = lines[i].split(",").map(v => v.trim());
+            const get = (key: string) => vals[headers.indexOf(key)] || "";
+            const birth_date = get("birth_date") || get("dob");
+            const breeder_name = get("breeder_name") || get("breeder");
+            const gender = (get("gender") || "Male") as "Male" | "Female";
+            const color = get("color") || "Grey";
+            if (!birth_date || !breeder_name) continue;
+            addAnimal({
+              species: "donkey", birth_date, breeder_name,
+              breeder_cnic: get("breeder_cnic") || get("cnic"),
+              registered_farm: selectedFarm.name,
+              birth_location: get("birth_location") || get("location") || selectedFarm.location,
+              gender, color, status: "Registered at Breeder's Farm",
+              notes: get("notes"),
+            });
+            imported++;
+          }
+          if (imported === 0) setImportError("No valid rows found. Check column names.");
+          else { setImportError(""); alert(`✅ ${imported} donkey(s) imported successfully!`); }
+        } catch { setImportError("Failed to parse file. Ensure it's a valid CSV."); }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    };
+
+    const downloadSampleCSV = () => {
+      const csv = `birth_date,breeder_name,breeder_cnic,gender,color,birth_location,notes\n2026-06-01,Muhammad Ali,54301-1234567-1,Male,Grey,Quetta Balochistan,Healthy foal\n2026-06-05,Fatima Baloch,54301-7654321-2,Female,Brown,Sibi Balochistan,`;
+      const blob = new Blob([csv], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "donkey_import_sample.csv";
+      a.click();
+    };
+
+    const handleRegisterDonkey = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!donkeyForm.birth_date || !donkeyForm.breeder_name || !donkeyForm.color) return;
+      addAnimal({
+        species: "donkey",
+        birth_date: donkeyForm.birth_date,
+        breeder_name: donkeyForm.breeder_name,
+        breeder_cnic: donkeyForm.breeder_cnic,
+        registered_farm: selectedFarm.name,
+        birth_location: donkeyForm.birth_location || selectedFarm.location,
+        gender: donkeyForm.gender,
+        color: donkeyForm.color,
+        status: "Registered at Breeder's Farm",
+        notes: donkeyForm.notes,
+      });
+      setDonkeyForm({ birth_date: "", breeder_name: "", breeder_cnic: "", birth_location: "", gender: "Male", color: "", notes: "" });
+      setShowRegisterDonkey(false);
+    };
+
+    return (
+      <div>
+        {/* Detail header */}
+        <div className="px-4 md:px-6 pt-5 pb-4 text-white" style={{ background: "var(--gradient-primary)" }}>
+          <button onClick={() => { setSelectedFarm(null); setShowMapEmbed(false); setShowRegisterDonkey(false); }}
+            className="flex items-center gap-1.5 text-white/70 hover:text-white text-xs mb-3 transition-colors">
+            <ChevronLeft size={14} /> Back to Farms
+          </button>
+          <div className="flex items-start gap-3">
+            <span className="text-3xl">🏡</span>
+            <div>
+              <h1 className="text-white text-lg font-bold leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>{selectedFarm.name}</h1>
+              <p className="text-white/60 text-xs mt-0.5 flex items-center gap-1"><MapPin size={11} />{selectedFarm.location || "Location not set"}</p>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4 flex-wrap">
+            <div className="px-3 py-1.5 rounded-full bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5"><span>🫏</span> {farmAnimals.length} Donkeys</div>
+            <div className="px-3 py-1.5 rounded-full bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5"><Users size={12} /> {uniqueBreeders.length} Breeders</div>
+            <div className="px-3 py-1.5 rounded-full bg-white/15 text-white text-xs font-semibold">Code: {selectedFarm.code}</div>
+          </div>
+        </div>
+
+        <div className="px-4 md:px-6 py-4 space-y-4">
+
+          {/* Action buttons */}
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => { setShowRegisterDonkey(true); setShowMapEmbed(false); }}
+              className="flex items-center justify-center gap-2 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+              style={{ background: "var(--gradient-brand)", fontFamily: "Montserrat, sans-serif" }}>
+              <Plus size={15} /> Register Donkey
+            </button>
+            <label className="flex items-center justify-center gap-2 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted transition-colors cursor-pointer"
+              style={{ fontFamily: "Montserrat, sans-serif" }}>
+              <Download size={15} /> Import CSV
+              <input type="file" accept=".csv" className="hidden" onChange={handleImportCSV} />
+            </label>
+          </div>
+          {importError && <p className="text-xs text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{importError}</p>}
+          <button onClick={downloadSampleCSV}
+            className="text-xs text-accent underline underline-offset-2 hover:opacity-70 transition-opacity"
+            style={{ fontFamily: "Montserrat, sans-serif" }}>
+            Download sample CSV template
+          </button>
+
+          {/* Register donkey inline form */}
+          {showRegisterDonkey && (
+            <div className="bg-white rounded-xl border border-border shadow-sm p-4 space-y-3">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-xs font-bold text-foreground uppercase tracking-wide" style={{ fontFamily: "Montserrat, sans-serif" }}>Register New Donkey</p>
+                <button onClick={() => setShowRegisterDonkey(false)} className="text-muted-foreground hover:text-foreground"><X size={15} /></button>
+              </div>
+              <p className="text-[11px] text-muted-foreground -mt-1">Farm: <span className="font-semibold text-foreground">{selectedFarm.name}</span></p>
+              <form onSubmit={handleRegisterDonkey} className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Date of Birth *</label>
+                    <input type="date" className={cn(inputCls, "mt-1")} required value={donkeyForm.birth_date} onChange={e => setDonkeyForm(f => ({ ...f, birth_date: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Gender *</label>
+                    <select className={cn(inputCls, "mt-1")} value={donkeyForm.gender} onChange={e => setDonkeyForm(f => ({ ...f, gender: e.target.value as "Male" | "Female" }))}>
+                      <option value="Male">Male (Jack)</option>
+                      <option value="Female">Female (Jenny)</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Breeder Name *</label>
+                  <input className={cn(inputCls, "mt-1")} placeholder="Full name of breeder" required
+                    autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                    value={donkeyForm.breeder_name} onChange={e => setDonkeyForm(f => ({ ...f, breeder_name: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Breeder CNIC</label>
+                  <input className={cn(inputCls, "mt-1")} placeholder="XXXXX-XXXXXXX-X" maxLength={15}
+                    autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} inputMode="numeric"
+                    value={donkeyForm.breeder_cnic} onChange={e => setDonkeyForm(f => ({ ...f, breeder_cnic: maskCnic(e.target.value) }))} />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Color *</label>
+                  <input className={cn(inputCls, "mt-1")} placeholder="e.g. Grey, Brown, Black & White" required
+                    autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                    value={donkeyForm.color} onChange={e => setDonkeyForm(f => ({ ...f, color: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Birth Location</label>
+                  <input className={cn(inputCls, "mt-1")} placeholder={selectedFarm.location || "City, Region"}
+                    autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                    value={donkeyForm.birth_location} onChange={e => setDonkeyForm(f => ({ ...f, birth_location: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Notes</label>
+                  <input className={cn(inputCls, "mt-1")} placeholder="Optional observations"
+                    autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                    value={donkeyForm.notes} onChange={e => setDonkeyForm(f => ({ ...f, notes: e.target.value }))} />
+                </div>
+                <button type="submit" className="w-full py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+                  style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
+                  Save Donkey
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Farm info card */}
+          <div className="bg-white rounded-xl border border-border shadow-sm p-4">
+            <p className="text-xs font-bold text-foreground uppercase tracking-wide mb-3" style={{ fontFamily: "Montserrat, sans-serif" }}>Farm Details</p>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+              <div><span className="text-muted-foreground">Owner</span><p className="font-semibold text-foreground mt-0.5">{selectedFarm.owner_name}</p></div>
+              {selectedFarm.owner_cnic && <div><span className="text-muted-foreground">CNIC</span><p className="font-mono font-semibold text-foreground mt-0.5">{selectedFarm.owner_cnic}</p></div>}
+              {selectedFarm.phone && <div><span className="text-muted-foreground">Phone</span><p className="font-semibold text-foreground mt-0.5">{selectedFarm.phone}</p></div>}
+            </div>
+
+            {/* Location / directions */}
+            {(selectedFarm.lat || selectedFarm.location) && (
+              <div className="mt-3 pt-3 border-t border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-muted-foreground">Location</p>
+                  <div className="flex gap-2">
+                    <a href={mapsUrl} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-xs font-semibold text-accent hover:opacity-80 transition-opacity">
+                      <MapPin size={12} /> Get Directions
+                    </a>
+                    <button onClick={() => setShowMapEmbed(v => !v)}
+                      className="text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors">
+                      {showMapEmbed ? "Hide Map" : "Show Map"}
+                    </button>
+                  </div>
+                </div>
+                {selectedFarm.lat && (
+                  <p className="font-mono text-[11px] text-muted-foreground">{selectedFarm.lat.toFixed(5)}, {selectedFarm.lng?.toFixed(5)}</p>
+                )}
+                {showMapEmbed && (
+                  <div className="mt-2 rounded-xl overflow-hidden border border-border" style={{ height: 220 }}>
+                    <iframe
+                      src={embedUrl}
+                      width="100%" height="220" style={{ border: 0 }}
+                      allowFullScreen loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                      title="Farm Location"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Status breakdown */}
+          {farmAnimals.length > 0 && (
+            <div className="bg-white rounded-xl border border-border shadow-sm p-4">
+              <p className="text-xs font-bold text-foreground uppercase tracking-wide mb-3" style={{ fontFamily: "Montserrat, sans-serif" }}>Status Breakdown</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(statusCounts).map(([status, count]) => (
+                  <div key={status} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-muted text-xs font-semibold">
+                    <span className="text-foreground">{count}</span>
+                    <span className="text-muted-foreground">{status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Donkeys list — clickable cards */}
+          <div className="bg-white rounded-xl border border-border shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <p className="text-xs font-bold text-foreground uppercase tracking-wide" style={{ fontFamily: "Montserrat, sans-serif" }}>Registered Donkeys</p>
+              <span className="text-xs text-muted-foreground">{farmAnimals.length} total</span>
+            </div>
+            {farmAnimals.length === 0 ? (
+              <div className="text-center py-10 text-muted-foreground">
+                <p className="text-2xl mb-2">🫏</p>
+                <p className="text-sm font-medium">No donkeys registered yet</p>
+                <button onClick={() => setShowRegisterDonkey(true)}
+                  className="mt-3 text-xs font-semibold text-accent hover:opacity-80 underline underline-offset-2">
+                  Register the first donkey
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {farmAnimals.map(a => (
+                  <button key={a.id} onClick={() => navigate(`/animal/${a.id}`)}
+                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-muted/50 transition-colors text-left">
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-muted text-lg">🫏</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-xs font-bold text-foreground">{a.id}</span>
+                        <StatusBadge status={a.status} />
+                      </div>
+                      <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                        <span className="text-[11px] text-muted-foreground">{a.gender} · {a.color}</span>
+                        <span className="text-[11px] text-muted-foreground">DOB: {a.birth_date}</span>
+                        <span className="text-[11px] text-muted-foreground">Breeder: {a.breeder_name}</span>
+                      </div>
+                    </div>
+                    <ChevronRight size={14} className="text-muted-foreground flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="px-4 md:px-8 pt-5 pb-4 md:hidden" style={{ background: "var(--gradient-primary)" }}>
+        <h1 className="text-white text-lg font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>Registered Farms</h1>
+        <p className="text-white/60 text-xs mt-0.5">Manage breeder farms and owners</p>
+      </div>
+
+      <div className="px-4 md:px-6 py-4 md:py-6 space-y-4">
+        {/* Add button */}
+        <button onClick={() => setShowForm(true)}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 transition-opacity"
+          style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
+          <PlusCircle size={16} /> Register New Farm
+        </button>
+
+        {/* Farm list */}
+        {farms.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <p className="text-3xl mb-2">🏡</p>
+            <p className="text-sm font-medium">No farms registered yet</p>
+            <p className="text-xs mt-1 opacity-70">Add a farm above to get started</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            {farms.map(farm => {
+              const farmAnimals = animals.filter(a => a.registered_farm === farm.name);
+              const uniqueBreeders = new Set(farmAnimals.map(a => a.breeder_name)).size;
+              return (
+                <div key={farm.id} onClick={() => setSelectedFarm(farm)} className="bg-white rounded-xl border border-border shadow-sm overflow-hidden flex flex-col cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all">
+                  {/* Farm header */}
+                  <div className="px-3 py-2.5 flex items-start justify-between" style={{ background: "var(--gradient-primary)" }}>
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <span className="text-base flex-shrink-0">🏡</span>
+                      <div className="min-w-0">
+                        <p className="text-white font-bold text-xs leading-tight line-clamp-1" style={{ fontFamily: "Montserrat, sans-serif" }}>{farm.name}</p>
+                        <p className="text-white/60 text-[9px] line-clamp-1 mt-0.5">{farm.location || "Location not set"}</p>
+                      </div>
+                    </div>
+                    <button onClick={e => { e.stopPropagation(); setConfirmDelete(farm.id); }}
+                      className="p-1 rounded-lg bg-white/10 hover:bg-red-500/30 transition-colors flex-shrink-0 ml-1">
+                      <Trash2 size={11} className="text-white/70" />
+                    </button>
+                  </div>
+
+                  {/* Stats row */}
+                  <div className="flex border-b border-border">
+                    <div className="flex-1 px-3 py-2 border-r border-border">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wide">Donkeys</p>
+                      <p className="text-base font-bold text-foreground leading-none mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>{farmAnimals.length}</p>
+                    </div>
+                    <div className="flex-1 px-3 py-2">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wide">Breeders</p>
+                      <p className="text-base font-bold text-foreground leading-none mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>{uniqueBreeders}</p>
+                    </div>
+                  </div>
+
+                  {/* Owner info */}
+                  <div className="px-3 py-2 text-[10px] border-b border-border space-y-1">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Owner</span>
+                      <span className="font-semibold text-foreground text-right truncate">{farm.owner_name}</span>
+                    </div>
+                    {farm.owner_cnic && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-muted-foreground">CNIC</span>
+                        <span className="font-mono font-semibold text-foreground">{farm.owner_cnic}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Donkey list */}
+                  {farmAnimals.length > 0 && (
+                    <div className="px-3 py-2 flex-1">
+                      <div className="space-y-1">
+                        {farmAnimals.slice(0, 3).map(a => (
+                          <div key={a.id} className="flex items-center gap-1.5 bg-muted/50 rounded-lg px-2 py-1">
+                            <span className="text-xs">🫏</span>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-mono text-[9px] font-bold text-foreground truncate">{a.id}</p>
+                              <p className="text-[9px] text-muted-foreground truncate">{a.breeder_name} · {a.color}</p>
+                            </div>
+                            <StatusBadge status={a.status} />
+                          </div>
+                        ))}
+                        {farmAnimals.length > 3 && (
+                          <p className="text-[9px] text-muted-foreground text-center pt-0.5">+{farmAnimals.length - 3} more</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Add Farm bottom sheet */}
+      {showForm && (
+        <BottomSheet title="Register New Farm" onClose={() => setShowForm(false)}>
+          <form onSubmit={handleAdd} className="px-4 py-4 space-y-4 pb-6">
+            <InputField label="Farm Name" required>
+              <input className={inputCls} placeholder="e.g. DesertWind Stables" required
+                autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            </InputField>
+            <InputField label="Farm Location">
+              <LocationSearch
+                value={form.location}
+                onChange={loc => setForm(f => ({ ...f, location: loc.label, lat: loc.lat, lng: loc.lng }))}
+              />
+              {form.lat && (
+                <p className="text-[11px] text-accent mt-1 flex items-center gap-1">
+                  <MapPin size={11} /> {form.lat.toFixed(5)}, {form.lng?.toFixed(5)}
+                </p>
+              )}
+            </InputField>
+            <InputField label="Owner Name" required>
+              <input className={inputCls} placeholder="e.g. Muhammad Saleem" required
+                autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                value={form.owner_name} onChange={e => setForm(f => ({ ...f, owner_name: e.target.value }))} />
+            </InputField>
+            <InputField label="Owner CNIC">
+              <input className={inputCls} placeholder="XXXXX-XXXXXXX-X" maxLength={15}
+                autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} inputMode="numeric"
+                value={form.owner_cnic} onChange={e => setForm(f => ({ ...f, owner_cnic: maskCnic(e.target.value) }))} />
+            </InputField>
+            <InputField label="Phone Number">
+              <input className={inputCls} placeholder="e.g. 0300-1234567"
+                autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} inputMode="tel"
+                value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+            </InputField>
+            <button type="submit"
+              className="w-full py-3 rounded-xl text-white font-bold text-sm hover:opacity-90 transition-opacity"
+              style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
+              Save Farm
+            </button>
+          </form>
+        </BottomSheet>
+      )}
+
+      {/* Delete confirm */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
+            <p className="font-bold text-foreground mb-1" style={{ fontFamily: "Montserrat, sans-serif" }}>Remove Farm?</p>
+            <p className="text-sm text-muted-foreground mb-4">This will only remove the farm record. Animal records will not be affected.</p>
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmDelete(null)}
+                className="flex-1 py-2.5 rounded-xl border border-border text-sm font-semibold text-foreground hover:bg-muted">Cancel</button>
+              <button onClick={() => { deleteFarm(confirmDelete); setConfirmDelete(null); }}
+                className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold hover:bg-red-600">Remove</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── App Shell (uses router hooks) ───────────────────────────────────────────
 
 function AppShell() {
@@ -2542,7 +3285,7 @@ function AppShell() {
     } catch { return null; }
   });
   const data = useDataService();
-  const { animals, events, addAnimal, addEvent, updateAnimal, getAnimalEvents, isOnline } = data;
+  const { animals, events, farms, addAnimal, addEvent, updateAnimal, getAnimalEvents, isOnline } = data;
 
   // Derive active tab from current URL path
   const activeTab: Tab = ROUTE_TO_TAB[location.pathname] ?? "dashboard";
@@ -2579,6 +3322,7 @@ function AppShell() {
     navigate("/scan", { state: { statusFilter: status } });
   }, [navigate]);
 
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
     const onChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -2623,7 +3367,7 @@ function AppShell() {
 
   const PAGE_TITLES: Record<string, string> = {
     "/dashboard": "Dashboard", "/activities": "Activities", "/register": "Register Animal",
-    "/scan": "Search & Scan", "/reports": "Reports", "/profile": "Profile",
+    "/scan": "Search & Scan", "/reports": "Reports", "/profile": "More",
   };
   const pageTitle = location.pathname.startsWith("/animal/")
     ? "Animal Record"
@@ -2635,40 +3379,47 @@ function AppShell() {
     <div className="flex h-screen bg-background overflow-hidden farm-bg-pattern" style={{ fontFamily: "Manrope, sans-serif" }}>
 
       {/* ── DESKTOP SIDEBAR ── */}
-      <aside className="hidden md:flex md:flex-col w-60 flex-shrink-0 border-r border-border bg-white">
-        {/* Logo */}
-        <div className="px-5 py-5 border-b border-border" style={{ background: "var(--gradient-primary)" }}>
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: "rgba(255,255,255,0.15)" }}>
-              <AppLogoIcon size={18} />
+      <aside className={cn(
+        "hidden md:flex md:flex-col flex-shrink-0 border-r border-border bg-white transition-all duration-300",
+        sidebarCollapsed ? "w-16" : "w-60"
+      )}>
+        {/* Logo + collapse toggle */}
+        <div className="border-b border-border flex items-center justify-between bg-white" style={{ minHeight: 64 }}>
+          {!sidebarCollapsed && (
+            <div className="flex items-center px-3 py-2 flex-1 min-w-0">
+              <img src="/logo.png" alt="Track Now" className="h-10 w-auto object-contain" />
             </div>
-            <div>
-              <p className="text-white font-bold text-sm leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                Track Now
-              </p>
-              <p className="text-white/60 text-[10px]">Makuran Cattle Farm</p>
+          )}
+          {sidebarCollapsed && (
+            <div className="flex items-center justify-center w-full py-2">
+              <img src="/logo.png" alt="Track Now" className="h-8 w-auto object-contain" />
             </div>
-          </div>
+          )}
+          <button onClick={() => setSidebarCollapsed(c => !c)}
+            className="p-1.5 mr-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground flex-shrink-0">
+            {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          </button>
         </div>
 
         {/* Register CTA */}
-        <div className="px-4 py-4 border-b border-border">
+        <div className="px-3 py-3 border-b border-border">
           <button
             onClick={() => canRegister && goTo("register")}
             disabled={!canRegister}
+            title="Register Animal"
             className={cn(
               "w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white text-sm font-bold transition-all",
               canRegister ? "hover:opacity-90 active:scale-[0.98]" : "opacity-40 cursor-not-allowed"
             )}
             style={{ background: canRegister ? "var(--gradient-brand)" : "#ccc", fontFamily: "Montserrat, sans-serif",
               boxShadow: canRegister ? "0 2px 12px rgba(47,181,114,0.35)" : undefined }}>
-            <Plus size={17} strokeWidth={2.5} /> Register Animal
+            <Plus size={17} strokeWidth={2.5} />
+            {!sidebarCollapsed && "Register Animal"}
           </button>
         </div>
 
         {/* Nav items */}
-        <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto scrollbar-hide">
+        <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto scrollbar-hide">
           {ALL_NAV.map(({ tab, icon: Icon, label }) => {
             const active = activeTab === tab;
             const allowed = allowedTabs.includes(tab);
@@ -2676,8 +3427,10 @@ function AppShell() {
             return (
               <button key={tab}
                 onClick={() => allowed && goTo(tab)}
+                title={sidebarCollapsed ? label : undefined}
                 className={cn(
                   "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all group",
+                  sidebarCollapsed && "justify-center px-2",
                   active ? "text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground",
                   !allowed ? "opacity-30 cursor-not-allowed" : ""
                 )}
@@ -2690,49 +3443,69 @@ function AppShell() {
                 ) : (
                   <Icon size={18} strokeWidth={active ? 2 : 1.5} className="flex-shrink-0" />
                 )}
-                <span className="text-sm font-semibold">{label}</span>
-                {!allowed && <Lock size={11} className="ml-auto opacity-50" />}
+                {!sidebarCollapsed && <span className="text-sm font-semibold">{label}</span>}
+                {!sidebarCollapsed && !allowed && <Lock size={11} className="ml-auto opacity-50" />}
               </button>
             );
           })}
-          {/* Reports link in sidebar */}
           {rm.canViewReports && (
             <button onClick={() => goTo("reports")}
+              title={sidebarCollapsed ? "Reports" : undefined}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all",
+                sidebarCollapsed && "justify-center px-2",
                 activeTab === "reports" ? "text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground"
               )}
               style={{ background: activeTab === "reports" ? "var(--gradient-primary)" : undefined, fontFamily: "Montserrat, sans-serif" }}>
               <BarChart2 size={18} strokeWidth={activeTab === "reports" ? 2 : 1.5} className="flex-shrink-0" />
-              <span className="text-sm font-semibold">Reports</span>
+              {!sidebarCollapsed && <span className="text-sm font-semibold">Reports</span>}
+            </button>
+          )}
+          {currentUser.role === "administrator" && (
+            <button onClick={() => goTo("farms")}
+              title={sidebarCollapsed ? "Farms" : undefined}
+              className={cn(
+                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all",
+                sidebarCollapsed && "justify-center px-2",
+                activeTab === "farms" ? "text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+              style={{ background: activeTab === "farms" ? "var(--gradient-primary)" : undefined, fontFamily: "Montserrat, sans-serif" }}>
+              <Building2 size={18} strokeWidth={activeTab === "farms" ? 2 : 1.5} className="flex-shrink-0" />
+              {!sidebarCollapsed && <span className="text-sm font-semibold">Farms</span>}
             </button>
           )}
         </nav>
 
         {/* User + sync at bottom */}
-        <div className="px-4 py-4 border-t border-border space-y-3">
-          <div className={cn(
-            "flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1.5 rounded-lg w-fit",
-            isOnline ? "bg-muted text-secondary" : "bg-yellow-100 text-yellow-700"
-          )} style={{ fontFamily: "Montserrat, sans-serif" }}>
-            <span className={cn("w-1.5 h-1.5 rounded-full animate-pulse", isOnline ? "bg-secondary" : "bg-yellow-400")} />
-            {isOnline ? "Synced" : "Offline"}
-          </div>
-          <div className="flex items-center gap-2.5">
+        <div className="px-3 py-4 border-t border-border space-y-3">
+          {!sidebarCollapsed && (
+            <div className={cn(
+              "flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1.5 rounded-lg w-fit",
+              isOnline ? "bg-muted text-secondary" : "bg-yellow-100 text-yellow-700"
+            )} style={{ fontFamily: "Montserrat, sans-serif" }}>
+              <span className={cn("w-1.5 h-1.5 rounded-full animate-pulse", isOnline ? "bg-secondary" : "bg-yellow-400")} />
+              {isOnline ? "Synced" : "Offline"}
+            </div>
+          )}
+          <div className={cn("flex items-center gap-2.5", sidebarCollapsed && "justify-center")}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
               style={{ background: rm.bg, color: rm.color, fontFamily: "Montserrat, sans-serif" }}>
               {currentUser.avatar}
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-bold text-foreground truncate" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                {currentUser.name}
-              </p>
-              <p className="text-[10px] text-muted-foreground">{rm.label}</p>
-            </div>
-            <button onClick={handleLogout} title="Sign out"
-              className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">
-              <LogOut size={14} />
-            </button>
+            {!sidebarCollapsed && (
+              <>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-foreground truncate" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                    {currentUser.name}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">{rm.label}</p>
+                </div>
+                <button onClick={handleLogout} title="Sign out"
+                  className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">
+                  <LogOut size={14} />
+                </button>
+              </>
+            )}
           </div>
         </div>
       </aside>
@@ -2746,7 +3519,7 @@ function AppShell() {
             <h1 className="text-base font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
               {pageTitle}
             </h1>
-            <p className="text-xs text-muted-foreground">Makuran Cattle Farm Traceability Platform</p>
+            <p className="text-xs text-muted-foreground">Track Now Traceability Platform</p>
           </div>
           <div className="flex items-center gap-3">
             <button onClick={toggleFullscreen} title={isFullscreen ? "Exit full screen" : "Enter full screen"}
@@ -2774,7 +3547,7 @@ function AppShell() {
               } />
               <Route path="/register" element={
                 canRegister
-                  ? <RegisterAnimal addAnimal={addAnimal} updateAnimal={updateAnimal} recordedBy={currentUser.name} />
+                  ? <RegisterAnimal addAnimal={addAnimal} updateAnimal={updateAnimal} recordedBy={currentUser.name} farms={farms} />
                   : <LockedSection role={rm.label} />
               } />
               <Route path="/activities" element={
@@ -2786,6 +3559,11 @@ function AppShell() {
               <Route path="/reports" element={
                 rm.canViewReports
                   ? <Reports animals={animals} canExport={rm.canExport} />
+                  : <LockedSection role={rm.label} />
+              } />
+              <Route path="/farms" element={
+                currentUser.role === "administrator"
+                  ? <FarmsManagement animals={animals} />
                   : <LockedSection role={rm.label} />
               } />
               <Route path="/profile" element={
@@ -2925,7 +3703,7 @@ function NotFoundPage() {
           </button>
         </div>
 
-        <p className="text-xs text-muted-foreground mt-10">Track Now · Makuran Cattle Farm</p>
+        <p className="text-xs text-muted-foreground mt-10">Track Now · Track Now</p>
       </div>
     </div>
   );
@@ -2933,7 +3711,7 @@ function NotFoundPage() {
 
 // ─── Site Password Gate (prototype-wide access lock) ──────────────────────────
 
-const SITE_PASSWORD = "Abcd@4321";
+const SITE_PASSWORD = "TrckN0w#Pk@2026!";
 const SITE_UNLOCK_KEY = "mcf_site_unlocked";
 
 function SitePasswordGate({ children }: { children: React.ReactNode }) {
@@ -3012,14 +3790,12 @@ function SitePasswordGate({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <SitePasswordGate>
-      <HashRouter>
-        <Routes>
-          {/* Login is the home page — AppShell handles / as well as all auth routes */}
-          <Route path="*" element={<AppShellWithNotFound />} />
-        </Routes>
-      </HashRouter>
-    </SitePasswordGate>
+    <HashRouter>
+      <Routes>
+        {/* Login is the home page — AppShell handles / as well as all auth routes */}
+        <Route path="*" element={<AppShellWithNotFound />} />
+      </Routes>
+    </HashRouter>
   );
 }
 
@@ -3027,7 +3803,7 @@ function AppShellWithNotFound() {
   const location = useLocation();
   const knownRoutes = [
     "/", "/login", "/dashboard", "/activities", "/register",
-    "/scan", "/reports", "/profile",
+    "/scan", "/reports", "/profile", "/farms",
   ];
   const isKnown = knownRoutes.includes(location.pathname)
     || location.pathname.startsWith("/animal/");
