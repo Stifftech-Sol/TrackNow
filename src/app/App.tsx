@@ -11,7 +11,8 @@ import {
   Stethoscope, Skull, Clock, ScanLine, FileDown, Database,
   Info, Activity, Eye, EyeOff, LogOut, Lock, Shield,
   UserCheck, Users, ChevronDown, Plus, Settings, KeyRound,
-  Bell, ChevronRight as ChevronRight2, CheckCircle
+  Bell, ChevronRight as ChevronRight2, CheckCircle,
+  Maximize, Minimize
 } from "lucide-react";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar,
@@ -21,7 +22,7 @@ import {
 // ─── Auth / Role Types ────────────────────────────────────────────────────────
 
 type Role = "administrator" | "farm_manager" | "veterinarian" | "breeder";
-type Tab = "dashboard" | "register" | "event" | "search" | "reports" | "profile";
+type Tab = "dashboard" | "register" | "activities" | "search" | "reports" | "profile";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ type AnimalStatus =
   | "Registered at Breeder's Farm"
   | "Transferred, Pending Quarantine"
   | "In Quarantine"
-  | "Active at Farm"
+  | "Cleared at Farm"
   | "Sent to Slaughterhouse";
 type EventType =
   | "Birth Registered"
@@ -67,7 +68,7 @@ const ROLE_META: Record<Role, RoleMeta> = {
     description: "Full system access — animals, events, reports, exports, and user management",
     color: "#ffffff",
     bg: "#182951",
-    tabs: ["dashboard", "event", "register", "search", "reports", "profile"],
+    tabs: ["dashboard", "register", "activities", "search", "reports", "profile"],
     canWrite: true,
     canRecordEvents: true,
     canExport: true,
@@ -78,7 +79,7 @@ const ROLE_META: Record<Role, RoleMeta> = {
     description: "Manage all animals and events, view and export full reports",
     color: "#ffffff",
     bg: "#2D7DD2",
-    tabs: ["dashboard", "event", "register", "search", "reports", "profile"],
+    tabs: ["dashboard", "register", "activities", "search", "reports", "profile"],
     canWrite: true,
     canRecordEvents: true,
     canExport: true,
@@ -89,7 +90,7 @@ const ROLE_META: Record<Role, RoleMeta> = {
     description: "Record health checks, quarantine start/end, and view animal histories",
     color: "#182951",
     bg: "#E3F8EF",
-    tabs: ["dashboard", "event", "register", "search", "reports", "profile"],
+    tabs: ["dashboard", "register", "activities", "search", "reports", "profile"],
     canWrite: false,
     canRecordEvents: true,
     canExport: false,
@@ -101,7 +102,7 @@ const ROLE_META: Record<Role, RoleMeta> = {
     description: "Register births for your farm and view your own animals only",
     color: "#ffffff",
     bg: "#2FB572",
-    tabs: ["dashboard", "event", "register", "search", "reports", "profile"],
+    tabs: ["dashboard", "register", "activities", "search", "reports", "profile"],
     canWrite: true,
     canRecordEvents: false,
     canExport: false,
@@ -164,7 +165,7 @@ const STATUS_META: Record<AnimalStatus, { color: string; bg: string; label: stri
   "Registered at Breeder's Farm":    { color: "#2D7DD2", bg: "#EBF4FF", label: "At Breeder" },
   "Transferred, Pending Quarantine": { color: "#182951", bg: "#E8EBF2", label: "Transferred" },
   "In Quarantine":                   { color: "#9E9E9E", bg: "#F5F5F5", label: "Quarantine" },
-  "Active at Farm":                  { color: "#2FB572", bg: "#E3F8EF", label: "Active" },
+  "Cleared at Farm":                  { color: "#2FB572", bg: "#E3F8EF", label: "Cleared" },
   "Sent to Slaughterhouse":          { color: "#d4183d", bg: "#FDEAEE", label: "Slaughter" },
 };
 
@@ -185,59 +186,95 @@ const TRANSFER_CONDITIONS = [
   "Underweight",
 ];
 
+// ─── Lifecycle Workflow ────────────────────────────────────────────────────────
+// Animals move through these stages in order. Each transitioning event type can
+// only fire from one specific status, advancing to exactly the next status.
+// Health Check / Other are non-transitioning and allowed at any stage.
+
+const STATUS_ORDER: AnimalStatus[] = [
+  "Registered at Breeder's Farm",
+  "Transferred, Pending Quarantine",
+  "In Quarantine",
+  "Cleared at Farm",
+  "Sent to Slaughterhouse",
+];
+
+const NEXT_STATUS: Partial<Record<AnimalStatus, AnimalStatus>> = {
+  "Registered at Breeder's Farm":    "Transferred, Pending Quarantine",
+  "Transferred, Pending Quarantine": "In Quarantine",
+  "In Quarantine":                   "Cleared at Farm",
+  "Cleared at Farm":                  "Sent to Slaughterhouse",
+};
+
+// The single transitioning event type that advances a given status to the next stage
+const TRANSITION_EVENT_FOR_STATUS: Partial<Record<AnimalStatus, EventType>> = {
+  "Registered at Breeder's Farm":    "Transfer to MCF Farm",
+  "Transferred, Pending Quarantine": "Quarantine Start",
+  "In Quarantine":                   "Quarantine End",
+  "Cleared at Farm":                  "Movement to Slaughter",
+};
+
+const NON_TRANSITIONING_EVENTS: EventType[] = ["Health Check", "Other"];
+
+function allowedEventTypesForAnimal(status: AnimalStatus, roleAllowed?: EventType[]): EventType[] {
+  const next = TRANSITION_EVENT_FOR_STATUS[status];
+  const types = next ? [next, ...NON_TRANSITIONING_EVENTS] : [...NON_TRANSITIONING_EVENTS];
+  return roleAllowed ? types.filter(t => roleAllowed.includes(t)) : types;
+}
+
 // ─── Seed Data ───────────────────────────────────────────────────────────────
 
 const SEED_ANIMALS: Animal[] = [
   {
     id: "MCF-CTL-202604-001", species: "cattle", birth_date: "2026-04-12",
-    breeder_name: "Haji Kareem Baloch", birth_location: "Turbat, Kech",
+    breeder_name: "GreenMeadow", birth_location: "Turbat, Kech",
     birth_lat: 26.0035, birth_lng: 63.0681,
-    gender: "Male", color: "Black & White", status: "Active at Farm",
+    gender: "Male", color: "Black & White", status: "Cleared at Farm",
     created_at: "2026-04-12T08:00:00Z",
   },
   {
     id: "MCF-CTL-202604-002", species: "cattle", birth_date: "2026-04-15",
-    breeder_name: "Haji Kareem Baloch", birth_location: "Turbat, Kech",
+    breeder_name: "RiverValley", birth_location: "Turbat, Kech",
     birth_lat: 26.0035, birth_lng: 63.0681,
     gender: "Female", color: "Brown", status: "In Quarantine",
     created_at: "2026-04-15T09:30:00Z",
   },
   {
     id: "MCF-GOT-202605-001", species: "goat", birth_date: "2026-05-03",
-    breeder_name: "Saeed Ahmed Mengal", birth_location: "Khuzdar, Balochistan",
+    breeder_name: "AlpineGlow", birth_location: "Khuzdar, Balochistan",
     birth_lat: 27.8136, birth_lng: 66.6111,
     gender: "Male", color: "White & Brown", status: "Registered at Breeder's Farm",
     created_at: "2026-05-03T07:15:00Z",
   },
   {
     id: "MCF-GOT-202605-002", species: "goat", birth_date: "2026-05-10",
-    breeder_name: "Saeed Ahmed Mengal", birth_location: "Khuzdar, Balochistan",
+    breeder_name: "DesertRose", birth_location: "Khuzdar, Balochistan",
     gender: "Female", color: "All White", status: "Transferred, Pending Quarantine",
     created_at: "2026-05-10T10:00:00Z",
   },
   {
     id: "MCF-SHP-202605-001", species: "sheep", birth_date: "2026-05-18",
-    breeder_name: "Abdul Rahim Zehri", birth_location: "Mastung, Balochistan",
+    breeder_name: "GoldenFleece", birth_location: "Mastung, Balochistan",
     birth_lat: 29.7985, birth_lng: 66.8458,
-    gender: "Female", color: "White", status: "Active at Farm",
+    gender: "Female", color: "White", status: "Cleared at Farm",
     created_at: "2026-05-18T11:00:00Z",
   },
   {
     id: "MCF-SHP-202605-002", species: "sheep", birth_date: "2026-05-22",
-    breeder_name: "Abdul Rahim Zehri", birth_location: "Mastung, Balochistan",
+    breeder_name: "RollingHills", birth_location: "Mastung, Balochistan",
     gender: "Male", color: "Grey & White", status: "Sent to Slaughterhouse",
     created_at: "2026-05-22T08:45:00Z",
   },
   {
     id: "MCF-BUF-202606-001", species: "buffalo", birth_date: "2026-06-01",
-    breeder_name: "Ghulam Rasool Noor", birth_location: "Dera Murad Jamali",
+    breeder_name: "HighlandCrest", birth_location: "Dera Murad Jamali",
     birth_lat: 29.4609, birth_lng: 67.3287,
     gender: "Female", color: "Dark Grey", status: "Registered at Breeder's Farm",
     created_at: "2026-06-01T06:30:00Z",
   },
   {
     id: "MCF-CAM-202606-001", species: "camel", birth_date: "2026-06-10",
-    breeder_name: "Mir Naseer Marri", birth_location: "Sibi, Balochistan",
+    breeder_name: "Al Marmoom", birth_location: "Sibi, Balochistan",
     birth_lat: 29.5431, birth_lng: 67.8772,
     gender: "Male", color: "Tan / Sandy Brown", status: "Registered at Breeder's Farm",
     created_at: "2026-06-10T09:00:00Z",
@@ -246,42 +283,42 @@ const SEED_ANIMALS: Animal[] = [
 
 const SEED_EVENTS: AnimalEvent[] = [
   // MCF-CTL-202604-001 — full lifecycle
-  { id: "e1",  animal_id: "MCF-CTL-202604-001", event_type: "Birth Registered",    event_date: "2026-04-12", location: "Turbat, Kech",           lat: 26.0035, lng: 63.0681, notes: "Healthy bull calf, normal birth weight approx. 28kg.", recorded_by: "Haji Kareem Baloch", recorded_at: "2026-04-12T08:05:00Z" },
-  { id: "e2",  animal_id: "MCF-CTL-202604-001", event_type: "Transfer to MCF Farm", event_date: "2026-04-28", location: "MCF Central Farm, Turbat", notes: "Animal in excellent condition on arrival.",           recorded_by: "Nasreen Mengal",    previous_owner: "Haji Kareem Baloch", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-04-28T10:00:00Z" },
+  { id: "e1",  animal_id: "MCF-CTL-202604-001", event_type: "Birth Registered",    event_date: "2026-04-12", location: "Turbat, Kech",           lat: 26.0035, lng: 63.0681, notes: "Healthy bull calf, normal birth weight approx. 28kg.", recorded_by: "GreenMeadow", recorded_at: "2026-04-12T08:05:00Z" },
+  { id: "e2",  animal_id: "MCF-CTL-202604-001", event_type: "Transfer to MCF Farm", event_date: "2026-04-28", location: "MCF Central Farm, Turbat", notes: "Animal in excellent condition on arrival.",           recorded_by: "Nasreen Mengal",    previous_owner: "GreenMeadow", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-04-28T10:00:00Z" },
   { id: "e3",  animal_id: "MCF-CTL-202604-001", event_type: "Quarantine Start",     event_date: "2026-04-28", location: "MCF Quarantine Block A",   notes: "Standard 21-day quarantine initiated per protocol.",   recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-04-28T11:00:00Z" },
   { id: "e4",  animal_id: "MCF-CTL-202604-001", event_type: "Quarantine End",       event_date: "2026-05-19", location: "MCF Quarantine Block A",   notes: "All tests clear — brucellosis, FMD negative. Released to main herd.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-05-19T09:00:00Z" },
   { id: "e5",  animal_id: "MCF-CTL-202604-001", event_type: "Health Check",         event_date: "2026-06-05", location: "MCF Central Farm",         notes: "Routine check. Weight 320kg. BCS 3.5/5. Vaccinations up to date.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-05T14:00:00Z" },
 
   // MCF-CTL-202604-002
-  { id: "e6",  animal_id: "MCF-CTL-202604-002", event_type: "Birth Registered",    event_date: "2026-04-15", location: "Turbat, Kech",             lat: 26.0035, lng: 63.0681, notes: "Female calf, healthy delivery. Birth weight 25kg.", recorded_by: "Haji Kareem Baloch", recorded_at: "2026-04-15T09:35:00Z" },
-  { id: "e7",  animal_id: "MCF-CTL-202604-002", event_type: "Transfer to MCF Farm", event_date: "2026-05-01", location: "MCF Central Farm, Turbat", notes: "Transferred with dam. Both in good health.",           recorded_by: "Nasreen Mengal",    previous_owner: "Haji Kareem Baloch", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-05-01T10:00:00Z" },
+  { id: "e6",  animal_id: "MCF-CTL-202604-002", event_type: "Birth Registered",    event_date: "2026-04-15", location: "Turbat, Kech",             lat: 26.0035, lng: 63.0681, notes: "Female calf, healthy delivery. Birth weight 25kg.", recorded_by: "RiverValley", recorded_at: "2026-04-15T09:35:00Z" },
+  { id: "e7",  animal_id: "MCF-CTL-202604-002", event_type: "Transfer to MCF Farm", event_date: "2026-05-01", location: "MCF Central Farm, Turbat", notes: "Transferred with dam. Both in good health.",           recorded_by: "Nasreen Mengal",    previous_owner: "RiverValley", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-05-01T10:00:00Z" },
   { id: "e8",  animal_id: "MCF-CTL-202604-002", event_type: "Quarantine Start",     event_date: "2026-05-01", location: "MCF Quarantine Block B",   notes: "Quarantine initiated. Separate pen from dam.",          recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-05-01T11:30:00Z" },
 
   // MCF-GOT-202605-001
-  { id: "e9",  animal_id: "MCF-GOT-202605-001", event_type: "Birth Registered",    event_date: "2026-05-03", location: "Khuzdar, Balochistan",      lat: 27.8136, lng: 66.6111, notes: "Buck kid, strong and active. White & brown markings.", recorded_by: "Saeed Ahmed Mengal", recorded_at: "2026-05-03T07:20:00Z" },
+  { id: "e9",  animal_id: "MCF-GOT-202605-001", event_type: "Birth Registered",    event_date: "2026-05-03", location: "Khuzdar, Balochistan",      lat: 27.8136, lng: 66.6111, notes: "Buck kid, strong and active. White & brown markings.", recorded_by: "AlpineGlow", recorded_at: "2026-05-03T07:20:00Z" },
   { id: "e9b", animal_id: "MCF-GOT-202605-001", event_type: "Health Check",         event_date: "2026-05-20", location: "Khuzdar, Balochistan",      notes: "4-week check — good growth rate, no issues detected.", recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-05-20T10:00:00Z" },
 
   // MCF-GOT-202605-002
-  { id: "e10", animal_id: "MCF-GOT-202605-002", event_type: "Birth Registered",     event_date: "2026-05-10", location: "Khuzdar, Balochistan",     notes: "Doe kid, all-white fleece. Birth weight 3.8kg.",         recorded_by: "Saeed Ahmed Mengal", recorded_at: "2026-05-10T10:05:00Z" },
-  { id: "e11", animal_id: "MCF-GOT-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-15", location: "MCF Central Farm, Turbat", notes: "Weaned and transferred. Good travel condition.",          recorded_by: "Nasreen Mengal",     previous_owner: "Saeed Ahmed Mengal", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-15T08:00:00Z" },
+  { id: "e10", animal_id: "MCF-GOT-202605-002", event_type: "Birth Registered",     event_date: "2026-05-10", location: "Khuzdar, Balochistan",     notes: "Doe kid, all-white fleece. Birth weight 3.8kg.",         recorded_by: "DesertRose", recorded_at: "2026-05-10T10:05:00Z" },
+  { id: "e11", animal_id: "MCF-GOT-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-15", location: "MCF Central Farm, Turbat", notes: "Weaned and transferred. Good travel condition.",          recorded_by: "Nasreen Mengal",     previous_owner: "DesertRose", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-15T08:00:00Z" },
 
   // MCF-SHP-202605-001 — full lifecycle
-  { id: "e12", animal_id: "MCF-SHP-202605-001", event_type: "Birth Registered",     event_date: "2026-05-18", location: "Mastung, Balochistan",     lat: 29.7985, lng: 66.8458, notes: "Ewe lamb, white fleece. Birth weight 4.2kg.",         recorded_by: "Abdul Rahim Zehri", recorded_at: "2026-05-18T11:05:00Z" },
-  { id: "e13", animal_id: "MCF-SHP-202605-001", event_type: "Transfer to MCF Farm", event_date: "2026-06-01", location: "MCF Central Farm, Turbat", notes: "Transported by road — 3 hours. No stress observed.",     recorded_by: "Nasreen Mengal",    previous_owner: "Abdul Rahim Zehri", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-01T09:00:00Z" },
+  { id: "e12", animal_id: "MCF-SHP-202605-001", event_type: "Birth Registered",     event_date: "2026-05-18", location: "Mastung, Balochistan",     lat: 29.7985, lng: 66.8458, notes: "Ewe lamb, white fleece. Birth weight 4.2kg.",         recorded_by: "GoldenFleece", recorded_at: "2026-05-18T11:05:00Z" },
+  { id: "e13", animal_id: "MCF-SHP-202605-001", event_type: "Transfer to MCF Farm", event_date: "2026-06-01", location: "MCF Central Farm, Turbat", notes: "Transported by road — 3 hours. No stress observed.",     recorded_by: "Nasreen Mengal",    previous_owner: "GoldenFleece", transfer_condition: "Healthy - Good condition", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-01T09:00:00Z" },
   { id: "e14", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine Start",     event_date: "2026-06-01", location: "MCF Quarantine Block A",   notes: "Placed in small ruminant quarantine pen.",               recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-06-01T10:00:00Z" },
-  { id: "e15", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine End",       event_date: "2026-06-22", location: "MCF Quarantine Block A",   notes: "21-day period complete. All tests cleared. Status changed to Active at Farm.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-22T09:00:00Z" },
+  { id: "e15", animal_id: "MCF-SHP-202605-001", event_type: "Quarantine End",       event_date: "2026-06-22", location: "MCF Quarantine Block A",   notes: "21-day period complete. All tests cleared. Status changed to Cleared at Farm.", recorded_by: "Dr. Waqar Rind", recorded_at: "2026-06-22T09:00:00Z" },
 
   // MCF-SHP-202605-002 — sent to slaughter
-  { id: "e16", animal_id: "MCF-SHP-202605-002", event_type: "Birth Registered",     event_date: "2026-05-22", location: "Mastung, Balochistan",     notes: "Ram lamb, grey & white markings. Birth weight 3.9kg.",   recorded_by: "Abdul Rahim Zehri", recorded_at: "2026-05-22T08:50:00Z" },
-  { id: "e17", animal_id: "MCF-SHP-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-10", location: "MCF Central Farm, Turbat", notes: "Arrived underweight — 12kg instead of expected 15kg.",   recorded_by: "Nasreen Mengal",    previous_owner: "Abdul Rahim Zehri", transfer_condition: "Underweight", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-10T10:00:00Z" },
+  { id: "e16", animal_id: "MCF-SHP-202605-002", event_type: "Birth Registered",     event_date: "2026-05-22", location: "Mastung, Balochistan",     notes: "Ram lamb, grey & white markings. Birth weight 3.9kg.",   recorded_by: "RollingHills", recorded_at: "2026-05-22T08:50:00Z" },
+  { id: "e17", animal_id: "MCF-SHP-202605-002", event_type: "Transfer to MCF Farm", event_date: "2026-06-10", location: "MCF Central Farm, Turbat", notes: "Arrived underweight — 12kg instead of expected 15kg.",   recorded_by: "Nasreen Mengal",    previous_owner: "RollingHills", transfer_condition: "Underweight", transferred_to: "MCF Central Farm, Turbat", recorded_at: "2026-06-10T10:00:00Z" },
   { id: "e17b",animal_id: "MCF-SHP-202605-002", event_type: "Health Check",         event_date: "2026-06-12", location: "MCF Central Farm",         notes: "Supplementary feeding started. Weight monitored daily.",  recorded_by: "Dr. Waqar Rind",    recorded_at: "2026-06-12T09:00:00Z" },
   { id: "e18", animal_id: "MCF-SHP-202605-002", event_type: "Movement to Slaughter",event_date: "2026-06-25", location: "Quetta Slaughterhouse",    notes: "Transferred per management schedule. Live weight 16kg.", recorded_by: "Imran Khan Baloch", transferred_to: "Quetta Slaughterhouse, Quetta", recorded_at: "2026-06-25T07:00:00Z" },
 
   // MCF-BUF-202606-001
-  { id: "e19", animal_id: "MCF-BUF-202606-001", event_type: "Birth Registered",    event_date: "2026-06-01", location: "Dera Murad Jamali",         lat: 29.4609, lng: 67.3287, notes: "Female calf, dark grey, healthy. Dam is high-yield milker.", recorded_by: "Ghulam Rasool Noor", recorded_at: "2026-06-01T06:35:00Z" },
+  { id: "e19", animal_id: "MCF-BUF-202606-001", event_type: "Birth Registered",    event_date: "2026-06-01", location: "Dera Murad Jamali",         lat: 29.4609, lng: 67.3287, notes: "Female calf, dark grey, healthy. Dam is high-yield milker.", recorded_by: "HighlandCrest", recorded_at: "2026-06-01T06:35:00Z" },
 
   // MCF-CAM-202606-001
-  { id: "e20", animal_id: "MCF-CAM-202606-001", event_type: "Birth Registered",    event_date: "2026-06-10", location: "Sibi, Balochistan",          lat: 29.5431, lng: 67.8772, notes: "Male calf, tan coat, good birth weight approx. 35kg.", recorded_by: "Mir Naseer Marri",   recorded_at: "2026-06-10T09:05:00Z" },
+  { id: "e20", animal_id: "MCF-CAM-202606-001", event_type: "Birth Registered",    event_date: "2026-06-10", location: "Sibi, Balochistan",          lat: 29.5431, lng: 67.8772, notes: "Male calf, tan coat, good birth weight approx. 35kg.", recorded_by: "Al Marmoom",   recorded_at: "2026-06-10T09:05:00Z" },
 ];
 
 // ─── Data Service (easy to swap to Supabase) ─────────────────────────────────
@@ -299,7 +336,7 @@ function saveToStorage<T>(key: string, value: T) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
 }
 
-const DATA_VERSION = "v4"; // bump to force re-seed when schema changes
+const DATA_VERSION = "v6"; // bump to force re-seed when schema changes
 
 function useDataService() {
   const [animals, setAnimals] = useState<Animal[]>(() => {
@@ -364,7 +401,7 @@ function useDataService() {
     const statusMap: Partial<Record<EventType, AnimalStatus>> = {
       "Transfer to MCF Farm":  "Transferred, Pending Quarantine",
       "Quarantine Start":      "In Quarantine",
-      "Quarantine End":        "Active at Farm",
+      "Quarantine End":        "Cleared at Farm",
       "Movement to Slaughter": "Sent to Slaughterhouse",
     };
     const newStatus = statusMap[evt.event_type];
@@ -381,7 +418,28 @@ function useDataService() {
       (a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime()
     ), [events]);
 
-  return { animals, events, addAnimal, addEvent, getAnimalEvents, isOnline, setIsOnline };
+  const updateAnimal = useCallback((animalId: string, changes: Partial<Animal>, recordedBy?: string) => {
+    const now = new Date();
+    setAnimals(prev => prev.map(a => {
+      if (a.id !== animalId) return a;
+      const updated = { ...a, ...changes };
+      if (changes.status && changes.status !== a.status) {
+        setEvents(evts => [{
+          id: `e${Date.now()}`,
+          animal_id: animalId,
+          event_type: "Other",
+          event_date: now.toISOString().split("T")[0],
+          location: a.birth_location,
+          notes: `Status updated: ${a.status} → ${changes.status}`,
+          recorded_by: recordedBy || "System",
+          recorded_at: now.toISOString(),
+        }, ...evts]);
+      }
+      return updated;
+    }));
+  }, []);
+
+  return { animals, events, addAnimal, addEvent, updateAnimal, getAnimalEvents, isOnline, setIsOnline };
 }
 
 // ─── Data Context (shared across all pages) ───────────────────────────────────
@@ -402,6 +460,20 @@ function formatDate(d: string) {
 
 function cn(...classes: (string | undefined | false)[]) {
   return classes.filter(Boolean).join(" ");
+}
+
+// ─── Brand Logo ────────────────────────────────────────────────────────────────
+// White location-pin mark with a green "track" arrow at its center — used inside
+// the colored rounded-square badge wherever the Track Now wordmark appears.
+
+function AppLogoIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C7.589 2 4 5.589 4 10c0 6.5 8 12 8 12s8-5.5 8-12c0-4.411-3.589-8-8-8z" fill="white" />
+      <circle cx="12" cy="9.5" r="3.2" fill="#2FB572" />
+      <path d="M13.3 7.9 L10.6 9.5 L13.3 11.1 Z" fill="white" />
+    </svg>
+  );
 }
 
 // ─── Shared Components ────────────────────────────────────────────────────────
@@ -465,6 +537,26 @@ function InputField({ label, required, children }: { label: string; required?: b
 }
 
 const inputCls = "w-full bg-input-background border border-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring text-foreground placeholder:text-muted-foreground";
+
+// ─── Bottom Sheet (mobile) / Centered Modal (desktop) ─────────────────────────
+
+function BottomSheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/50 animate-fadeInUp"
+      onClick={onClose}>
+      <div className="bg-white w-full md:max-w-md md:rounded-2xl rounded-t-2xl max-h-[85vh] overflow-y-auto animate-fadeInUp"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border sticky top-0 bg-white z-10">
+          <p className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>{title}</p>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-muted">
+            <X size={18} className="text-muted-foreground" />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 // ─── QR Modal ────────────────────────────────────────────────────────────────
 
@@ -614,15 +706,43 @@ function AnimalDetailModal({ animal, events, onClose }: { animal: Animal; events
 
 // ─── Animal Detail Page (/animal/:animalId) ───────────────────────────────────
 
-function AnimalDetailPage() {
+function AnimalDetailPage({ canEdit, recordedBy, canRecordEvents, allowedEventTypes }: {
+  canEdit: boolean;
+  recordedBy: string;
+  canRecordEvents: boolean;
+  allowedEventTypes?: EventType[];
+}) {
   const { animalId } = useParams<{ animalId: string }>();
   const navigate = useNavigate();
-  const { animals, getAnimalEvents, addEvent } = useData();
+  const { animals, getAnimalEvents, addEvent, updateAnimal } = useData();
   const [showQR, setShowQR] = useState(false);
   const [showEventForm, setShowEventForm] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editForm, setEditForm] = useState<{
+    breeder_name: string; birth_location: string; color: string; notes: string; status: AnimalStatus;
+  } | null>(null);
 
   const animal = animals.find(a => a.id === animalId);
   const events = animal ? getAnimalEvents(animal.id) : [];
+
+  const openEdit = () => {
+    if (!animal) return;
+    setEditForm({
+      breeder_name: animal.breeder_name,
+      birth_location: animal.birth_location,
+      color: animal.color,
+      notes: animal.notes || "",
+      status: animal.status,
+    });
+    setShowEdit(true);
+  };
+
+  const saveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!animal || !editForm) return;
+    updateAnimal(animal.id, { ...editForm }, recordedBy);
+    setShowEdit(false);
+  };
 
   if (!animal) {
     return (
@@ -654,7 +774,8 @@ function AnimalDetailPage() {
   return (
     <>
       {/* Gradient header with back nav */}
-      <div className="px-4 pt-4 pb-5 text-white" style={{ background: "var(--gradient-primary)" }}>
+      <div className="px-4 pt-4 pb-5 md:px-8 md:pt-6 md:pb-8 text-white" style={{ background: "var(--gradient-primary)" }}>
+        <div className="md:max-w-5xl md:mx-auto">
         <button onClick={() => navigate(-1)}
           className="flex items-center gap-1.5 text-white/70 text-xs font-semibold mb-3 hover:text-white transition-colors"
           style={{ fontFamily: "Montserrat, sans-serif" }}>
@@ -664,7 +785,7 @@ function AnimalDetailPage() {
           <span className="text-4xl mt-0.5">{sm.emoji}</span>
           <div className="flex-1 min-w-0">
             <p className="font-mono text-white/70 text-xs">{animal.id}</p>
-            <h1 className="text-white text-lg font-bold leading-tight mt-0.5"
+            <h1 className="text-white text-lg md:text-xl font-bold leading-tight mt-0.5"
               style={{ fontFamily: "Montserrat, sans-serif" }}>
               {sm.label} · {animal.gender === "Male" ? sm.male : sm.female}
             </h1>
@@ -675,22 +796,11 @@ function AnimalDetailPage() {
           </div>
         </div>
 
-        {/* Shareable URL hint */}
-        <div className="mt-4 flex items-center gap-2 bg-white/10 rounded-lg px-3 py-2">
-          <ScanLine size={13} className="text-white/60 flex-shrink-0" />
-          <p className="font-mono text-white/60 text-[10px] truncate">
-            {window.location.origin}{window.location.pathname}#/animal/{animal.id}
-          </p>
-          <button
-            onClick={() => navigator.clipboard?.writeText(`${window.location.origin}${window.location.pathname}#/animal/${animal.id}`)}
-            className="text-white/60 hover:text-white transition-colors flex-shrink-0 text-[10px] font-semibold"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>
-            Copy
-          </button>
         </div>
       </div>
 
-      <div className="px-4 py-4 space-y-4 pb-8">
+      <div className="px-4 py-4 pb-8 md:max-w-5xl md:mx-auto md:px-8 md:py-6 md:grid md:grid-cols-2 md:gap-6 md:items-start">
+        <div className="space-y-4">
         {/* Summary card */}
         <Card>
           <div className="grid grid-cols-2 gap-3 text-sm">
@@ -713,6 +823,12 @@ function AnimalDetailPage() {
                 </p>
               </div>
             )}
+            {animal.notes && (
+              <div className="col-span-2">
+                <p className="text-xs text-muted-foreground">Notes</p>
+                <p className="text-sm text-foreground italic">"{animal.notes}"</p>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -723,11 +839,20 @@ function AnimalDetailPage() {
             style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
             <ScanLine size={15} /> QR Code
           </button>
-          <button onClick={() => setShowEventForm(p => !p)}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
-            style={{ background: "var(--gradient-impact)", fontFamily: "Montserrat, sans-serif" }}>
-            <ClipboardList size={15} /> {showEventForm ? "Cancel" : "Add Event"}
-          </button>
+          {canRecordEvents && (
+            <button onClick={() => setShowEventForm(p => !p)}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+              style={{ background: "var(--gradient-impact)", fontFamily: "Montserrat, sans-serif" }}>
+              <ClipboardList size={15} /> {showEventForm ? "Cancel" : "Add Event"}
+            </button>
+          )}
+          {canEdit && (
+            <button onClick={() => (showEdit ? setShowEdit(false) : openEdit())}
+              className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted transition-colors"
+              style={{ fontFamily: "Montserrat, sans-serif" }}>
+              {showEdit ? <X size={15} /> : "Edit"}
+            </button>
+          )}
           <button onClick={() => navigate("/scan")}
             className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted transition-colors"
             style={{ fontFamily: "Montserrat, sans-serif" }}>
@@ -735,21 +860,7 @@ function AnimalDetailPage() {
           </button>
         </div>
 
-        {/* Inline quick-event form */}
-        {showEventForm && (
-          <div className="rounded-xl border border-border overflow-hidden animate-fadeInUp">
-            <div className="px-4 py-2.5 border-b border-border bg-muted/40">
-              <p className="text-xs font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                Quick Event — {animal.id}
-              </p>
-            </div>
-            <QuickEventForm
-              animalId={animal.id}
-              addEvent={addEvent}
-              onDone={() => setShowEventForm(false)}
-            />
-          </div>
-        )}
+        </div>
 
         {/* Timeline */}
         <div>
@@ -815,21 +926,82 @@ function AnimalDetailPage() {
         </div>
       </div>
 
+      {showEdit && editForm && (
+        <BottomSheet title={`Edit Record — ${animal.id}`} onClose={() => setShowEdit(false)}>
+          <form onSubmit={saveEdit} className="px-4 py-3 space-y-3">
+            <InputField label="Status">
+              <div className="flex items-center gap-2">
+                <StatusBadge status={editForm.status} />
+                {NEXT_STATUS[editForm.status] && (
+                  <button type="button"
+                    onClick={() => setEditForm(f => f && ({ ...f, status: NEXT_STATUS[f.status]! }))}
+                    className="flex items-center gap-1 text-xs font-semibold text-accent hover:opacity-80"
+                    style={{ fontFamily: "Montserrat, sans-serif" }}>
+                    <ChevronRight size={13} /> Advance to {STATUS_META[NEXT_STATUS[editForm.status]!].label}
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Status follows the lifecycle workflow and advances one stage at a time.
+              </p>
+            </InputField>
+            <InputField label="Breeder Name">
+              <input className={inputCls} value={editForm.breeder_name}
+                onChange={e => setEditForm(f => f && ({ ...f, breeder_name: e.target.value }))} />
+            </InputField>
+            <InputField label="Breeder Location / Village">
+              <input className={inputCls} value={editForm.birth_location}
+                onChange={e => setEditForm(f => f && ({ ...f, birth_location: e.target.value }))} />
+            </InputField>
+            <InputField label="Color / Markings">
+              <input className={inputCls} value={editForm.color}
+                onChange={e => setEditForm(f => f && ({ ...f, color: e.target.value }))} />
+            </InputField>
+            <InputField label="Notes">
+              <textarea className={cn(inputCls, "resize-none min-h-[70px]")} rows={2}
+                value={editForm.notes}
+                onChange={e => setEditForm(f => f && ({ ...f, notes: e.target.value }))} />
+            </InputField>
+            <button type="submit"
+              className="w-full py-2.5 rounded-lg text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+              style={{ background: "var(--gradient-impact)", fontFamily: "Montserrat, sans-serif" }}>
+              Save Changes
+            </button>
+          </form>
+        </BottomSheet>
+      )}
+
+      {showEventForm && (
+        <BottomSheet title={`Quick Event — ${animal.id}`} onClose={() => setShowEventForm(false)}>
+          <QuickEventForm
+            animalId={animal.id}
+            status={animal.status}
+            addEvent={addEvent}
+            allowedEventTypes={allowedEventTypes}
+            onDone={() => setShowEventForm(false)}
+          />
+        </BottomSheet>
+      )}
+
       {showQR && <QRModal animalId={animal.id} onClose={() => setShowQR(false)} />}
     </>
   );
 }
 
 // Minimal inline event form used on the animal detail page
-function QuickEventForm({ animalId, addEvent, onDone }: {
+function QuickEventForm({ animalId, status, addEvent, allowedEventTypes, onDone }: {
   animalId: string;
+  status: AnimalStatus;
   addEvent: DataService["addEvent"];
+  allowedEventTypes?: EventType[];
   onDone: () => void;
 }) {
-  const [eventType, setEventType] = useState<EventType>("Health Check");
+  const availableTypes = useMemo(() => allowedEventTypesForAnimal(status, allowedEventTypes), [status, allowedEventTypes]);
+  const [eventType, setEventType] = useState<EventType>(availableTypes[0]);
   const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
   const [location, setLocation] = useState("");
   const [notes, setNotes] = useState("");
+  const nextStatus = NEXT_STATUS[status];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -840,11 +1012,16 @@ function QuickEventForm({ animalId, addEvent, onDone }: {
 
   return (
     <form onSubmit={handleSubmit} className="px-4 py-3 space-y-3">
+      {nextStatus && (
+        <p className="text-xs text-muted-foreground">
+          Current stage: <span className="font-semibold text-foreground">{STATUS_META[status].label}</span> → next: <span className="font-semibold text-foreground">{STATUS_META[nextStatus].label}</span>
+        </p>
+      )}
       <div className="flex gap-2">
         <div className="flex-1">
           <label className="text-xs font-semibold text-muted-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Event</label>
           <select className={cn(inputCls, "mt-1")} value={eventType} onChange={e => setEventType(e.target.value as EventType)}>
-            {(Object.keys(EVENT_META) as EventType[]).filter(t => t !== "Birth Registered").map(t => (
+            {availableTypes.map(t => (
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
@@ -875,8 +1052,9 @@ function QuickEventForm({ animalId, addEvent, onDone }: {
 
 // ─── Dashboard Tab ────────────────────────────────────────────────────────────
 
-function Dashboard({ animals, events, isOnline, onAnimalClick }: {
+function Dashboard({ animals, events, isOnline, onAnimalClick, onStatusClick }: {
   animals: Animal[]; events: AnimalEvent[]; isOnline: boolean; onAnimalClick: (a: Animal) => void;
+  onStatusClick: (status: AnimalStatus) => void;
 }) {
   const speciesCounts = useMemo(() => {
     const counts: Partial<Record<Species, number>> = {};
@@ -886,10 +1064,21 @@ function Dashboard({ animals, events, isOnline, onAnimalClick }: {
 
   const stats = useMemo(() => ({
     total: animals.length,
-    quarantine: animals.filter(a => a.status === "In Quarantine").length,
-    breeders: animals.filter(a => a.status === "Registered at Breeder's Farm").length,
-    slaughter: animals.filter(a => a.status === "Sent to Slaughterhouse").length,
   }), [animals]);
+
+  const workflowCounts = useMemo(() => {
+    const counts: Partial<Record<AnimalStatus, number>> = {};
+    animals.forEach(a => { counts[a.status] = (counts[a.status] || 0) + 1; });
+    return counts;
+  }, [animals]);
+
+  const WORKFLOW_STEPS: { status: AnimalStatus; icon: typeof CheckCircle2; gradient: string; sub: string }[] = [
+    { status: "Registered at Breeder's Farm",    icon: User,           gradient: "var(--gradient-brand)", sub: "Pre-transfer" },
+    { status: "Transferred, Pending Quarantine", icon: ArrowRightLeft, gradient: "var(--gradient-primary)", sub: "En route to farm" },
+    { status: "In Quarantine",                   icon: AlertTriangle,  gradient: "var(--gradient-impact)", sub: "Awaiting clearance" },
+    { status: "Cleared at Farm",                 icon: CheckCircle2,   gradient: "linear-gradient(135deg,#2FB572 0%,#1d8a52 100%)", sub: "Healthy & settled" },
+    { status: "Sent to Slaughterhouse",          icon: Skull,          gradient: "linear-gradient(135deg,#d4183d 0%,#9b1228 100%)", sub: "Final movement" },
+  ];
 
   const recentEvents = useMemo(() =>
     [...events].sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime()).slice(0, 4),
@@ -898,7 +1087,7 @@ function Dashboard({ animals, events, isOnline, onAnimalClick }: {
   return (
     <div>
       {/* Header — hidden on desktop (sidebar + topbar handle branding) */}
-      <div className="md:hidden px-4 pt-5 pb-6" style={{ background: "var(--gradient-primary)" }}>
+      <div className="md:hidden px-4 pt-5 pb-6 farm-bg-pattern-light" style={{ background: "var(--gradient-primary)" }}>
         <div className="flex items-start justify-between">
           <div>
             <p className="text-white/70 text-xs font-medium tracking-wide uppercase" style={{ fontFamily: "Montserrat, sans-serif" }}>
@@ -915,44 +1104,56 @@ function Dashboard({ animals, events, isOnline, onAnimalClick }: {
             {isOnline ? "Synced" : "Offline"}
           </div>
         </div>
-        <div className="flex gap-2 mt-4 overflow-x-auto pb-1 scrollbar-hide">
-          {(Object.entries(speciesCounts) as [Species, number][]).map(([sp, cnt]) => (
-            <div key={sp} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/15 text-white text-xs font-semibold whitespace-nowrap"
-              style={{ fontFamily: "Montserrat, sans-serif" }}>
-              <span>{SPECIES_META[sp].emoji}</span>
-              <span>{cnt} {SPECIES_META[sp].label}</span>
-            </div>
-          ))}
-        </div>
       </div>
 
       <div className="px-4 md:px-6 -mt-3 md:mt-0 md:pt-6 space-y-4 md:space-y-6 pb-6">
-        {/* Desktop species row */}
-        <div className="hidden md:flex gap-2 flex-wrap">
-          {(Object.entries(speciesCounts) as [Species, number][]).map(([sp, cnt]) => (
-            <div key={sp} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-white text-xs font-semibold"
-              style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
-              <span>{SPECIES_META[sp].emoji}</span>
-              <span>{cnt} {SPECIES_META[sp].label}</span>
+
+        {/* Total Animals — big box with per-species breakdown inside */}
+        <div className="rounded-xl p-4 md:p-5 text-white shadow-sm" style={{ background: "var(--gradient-primary)" }}>
+          <div className="flex items-start justify-between">
+            <div>
+              <Activity size={20} strokeWidth={1.5} className="opacity-80 mb-2" />
+              <p className="text-2xl md:text-3xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>{stats.total}</p>
+              <p className="text-xs font-semibold opacity-90 mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>Total Animals</p>
+              <p className="text-xs opacity-60 mt-0.5">Across all species</p>
             </div>
-          ))}
+          </div>
+          {/* Categorized breakdown by breed/species */}
+          <div className="mt-4 pt-4 border-t border-white/15 grid grid-cols-3 md:grid-cols-5 gap-2">
+            {(Object.entries(speciesCounts) as [Species, number][]).map(([sp, cnt]) => (
+              <div key={sp} className="flex items-center gap-2 bg-white/10 rounded-lg px-2.5 py-2">
+                <span className="text-base">{SPECIES_META[sp].emoji}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-bold leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>{cnt}</p>
+                  <p className="text-[10px] opacity-75 truncate leading-tight">{SPECIES_META[sp].label}</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* Stat cards: 2 cols mobile → 4 cols desktop */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-          {[
-            { label: "Total Animals", value: stats.total, icon: Activity, gradient: "var(--gradient-primary)", sub: "Across all species" },
-            { label: "In Quarantine", value: stats.quarantine, icon: AlertTriangle, gradient: "var(--gradient-impact)", sub: "Awaiting clearance" },
-            { label: "At Breeders", value: stats.breeders, icon: User, gradient: "var(--gradient-brand)", sub: "Pre-transfer" },
-            { label: "Slaughtered", value: stats.slaughter, icon: Skull, gradient: "linear-gradient(135deg,#d4183d 0%,#9b1228 100%)", sub: "Final movement" },
-          ].map(({ label, value, icon: Icon, gradient, sub }) => (
-            <div key={label} className="rounded-xl p-4 md:p-5 text-white shadow-sm" style={{ background: gradient }}>
-              <Icon size={20} strokeWidth={1.5} className="opacity-80 mb-2" />
-              <p className="text-2xl md:text-3xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>{value}</p>
-              <p className="text-xs font-semibold opacity-90 mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>{label}</p>
-              <p className="text-xs opacity-60 mt-0.5">{sub}</p>
-            </div>
-          ))}
+        {/* Lifecycle workflow: all 5 statuses in order, with live counts */}
+        <div>
+          <h2 className="text-sm font-bold text-foreground mb-3" style={{ fontFamily: "Montserrat, sans-serif" }}>Lifecycle Workflow</h2>
+          <div className="flex md:grid md:grid-cols-5 gap-2 md:gap-3 overflow-x-auto pb-1 scrollbar-hide">
+            {WORKFLOW_STEPS.map(({ status, icon: Icon, gradient, sub }, i) => (
+              <div key={status} className="flex items-center flex-shrink-0 md:contents">
+                <button onClick={() => onStatusClick(status)}
+                  className="rounded-xl p-3 md:p-4 text-white shadow-sm min-w-[120px] md:min-w-0 text-left hover:opacity-90 active:scale-[0.98] transition-all"
+                  style={{ background: gradient }}>
+                  <Icon size={18} strokeWidth={1.5} className="opacity-80 mb-1.5 md:mb-2" />
+                  <p className="text-xl md:text-2xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>{workflowCounts[status] || 0}</p>
+                  <p className="text-[11px] md:text-xs font-semibold opacity-90 mt-0.5 leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                    {STATUS_META[status].label}
+                  </p>
+                  <p className="hidden md:block text-[11px] opacity-60 mt-0.5">{sub}</p>
+                </button>
+                {i < WORKFLOW_STEPS.length - 1 && (
+                  <ChevronRight size={16} className="text-muted-foreground flex-shrink-0 mx-1 md:hidden" />
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Recent Activity */}
@@ -973,10 +1174,17 @@ function Dashboard({ animals, events, isOnline, onAnimalClick }: {
                     <span className="text-lg">{SPECIES_META[animal.species].emoji}</span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-foreground truncate" style={{ fontFamily: "Montserrat, sans-serif" }}>
-                      {evt.event_type}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-xs font-bold text-foreground truncate" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                        {evt.event_type}
+                      </p>
+                      <StatusBadge status={animal.status} />
+                    </div>
                     <p className="text-xs text-muted-foreground truncate font-mono">{animal.id}</p>
+                    <p className="text-xs text-muted-foreground truncate">{animal.breeder_name}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {animal.gender === "Male" ? SPECIES_META[animal.species].male : SPECIES_META[animal.species].female} · {animal.color} · {animal.birth_location}
+                    </p>
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="text-xs text-muted-foreground">{formatDate(evt.event_date)}</p>
@@ -999,6 +1207,9 @@ function Dashboard({ animals, events, isOnline, onAnimalClick }: {
                   <div className="flex-1 min-w-0">
                     <p className="font-mono text-xs font-bold text-foreground truncate">{animal.id}</p>
                     <p className="text-xs text-muted-foreground truncate">{animal.breeder_name}</p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {animal.gender === "Male" ? sm.male : sm.female} · {animal.color} · {animal.birth_location}
+                    </p>
                   </div>
                   <StatusBadge status={animal.status} />
                 </Card>
@@ -1014,7 +1225,11 @@ function Dashboard({ animals, events, isOnline, onAnimalClick }: {
 
 // ─── Register Tab ─────────────────────────────────────────────────────────────
 
-function RegisterAnimal({ addAnimal }: { addAnimal: ReturnType<typeof useDataService>["addAnimal"] }) {
+function RegisterAnimal({ addAnimal, updateAnimal, recordedBy }: {
+  addAnimal: ReturnType<typeof useDataService>["addAnimal"];
+  updateAnimal: ReturnType<typeof useDataService>["updateAnimal"];
+  recordedBy: string;
+}) {
   const [species, setSpecies] = useState<Species>("cattle");
   const [form, setForm] = useState({
     breeder_name: "",
@@ -1029,7 +1244,31 @@ function RegisterAnimal({ addAnimal }: { addAnimal: ReturnType<typeof useDataSer
   const [gpsLoading, setGpsLoading] = useState(false);
   const [submitted, setSubmitted] = useState<Animal | null>(null);
   const [showQR, setShowQR] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editForm, setEditForm] = useState<{
+    breeder_name: string; birth_location: string; color: string; notes: string; status: AnimalStatus;
+  } | null>(null);
   const sm = SPECIES_META[species];
+
+  const openEdit = () => {
+    if (!submitted) return;
+    setEditForm({
+      breeder_name: submitted.breeder_name,
+      birth_location: submitted.birth_location,
+      color: submitted.color,
+      notes: submitted.notes || "",
+      status: submitted.status,
+    });
+    setShowEdit(true);
+  };
+
+  const saveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!submitted || !editForm) return;
+    updateAnimal(submitted.id, { ...editForm }, recordedBy);
+    setSubmitted({ ...submitted, ...editForm });
+    setShowEdit(false);
+  };
 
   const captureGPS = () => {
     setGpsLoading(true);
@@ -1068,6 +1307,9 @@ function RegisterAnimal({ addAnimal }: { addAnimal: ReturnType<typeof useDataSer
           <p className="text-xs text-muted-foreground mb-1" style={{ fontFamily: "Montserrat, sans-serif" }}>Traceability ID</p>
           <p className="font-mono text-base font-bold text-foreground">{submitted.id}</p>
           <p className="text-sm text-muted-foreground mt-1">{sm.emoji} {sm.label} · {submitted.gender === "Male" ? sm.male : sm.female}</p>
+          <div className="mt-2 flex justify-center">
+            <StatusBadge status={submitted.status} />
+          </div>
         </Card>
         <div className="flex flex-col items-center gap-3 bg-muted rounded-xl p-4">
           <QRCodeCanvas value={submitted.id} size={180} level="H" />
@@ -1079,12 +1321,69 @@ function RegisterAnimal({ addAnimal }: { addAnimal: ReturnType<typeof useDataSer
             style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
             <Download size={16} /> Download QR
           </button>
-          <button onClick={reset}
-            className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-border font-semibold text-sm hover:bg-muted transition-colors"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>
-            <PlusCircle size={16} /> Register Another
+          <button onClick={openEdit}
+            className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 transition-opacity"
+            style={{ background: "var(--gradient-impact)", fontFamily: "Montserrat, sans-serif" }}>
+            <ClipboardList size={16} /> Update Record
           </button>
         </div>
+        <button onClick={reset}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-border font-semibold text-sm hover:bg-muted transition-colors"
+          style={{ fontFamily: "Montserrat, sans-serif" }}>
+          <PlusCircle size={16} /> Register Another
+        </button>
+
+        {showEdit && editForm && (
+          <div className="rounded-xl border border-border overflow-hidden animate-fadeInUp">
+            <div className="px-4 py-2.5 border-b border-border bg-muted/40 flex items-center justify-between">
+              <p className="text-xs font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                Update Record — {submitted.id}
+              </p>
+              <button onClick={() => setShowEdit(false)} className="p-1 rounded-full hover:bg-muted"><X size={14} /></button>
+            </div>
+            <form onSubmit={saveEdit} className="px-4 py-3 space-y-3">
+              <InputField label="Status">
+                <div className="flex items-center gap-2">
+                  <StatusBadge status={editForm.status} />
+                  {NEXT_STATUS[editForm.status] && (
+                    <button type="button"
+                      onClick={() => setEditForm(f => f && ({ ...f, status: NEXT_STATUS[f.status]! }))}
+                      className="flex items-center gap-1 text-xs font-semibold text-accent hover:opacity-80"
+                      style={{ fontFamily: "Montserrat, sans-serif" }}>
+                      <ChevronRight size={13} /> Advance to {STATUS_META[NEXT_STATUS[editForm.status]!].label}
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Status follows the lifecycle workflow and advances one stage at a time.
+                </p>
+              </InputField>
+              <InputField label="Breeder Name">
+                <input className={inputCls} value={editForm.breeder_name}
+                  onChange={e => setEditForm(f => f && ({ ...f, breeder_name: e.target.value }))} />
+              </InputField>
+              <InputField label="Breeder Location / Village">
+                <input className={inputCls} value={editForm.birth_location}
+                  onChange={e => setEditForm(f => f && ({ ...f, birth_location: e.target.value }))} />
+              </InputField>
+              <InputField label="Color / Markings">
+                <input className={inputCls} value={editForm.color}
+                  onChange={e => setEditForm(f => f && ({ ...f, color: e.target.value }))} />
+              </InputField>
+              <InputField label="Notes">
+                <textarea className={cn(inputCls, "resize-none min-h-[70px]")} rows={2}
+                  value={editForm.notes}
+                  onChange={e => setEditForm(f => f && ({ ...f, notes: e.target.value }))} />
+              </InputField>
+              <button type="submit"
+                className="w-full py-2.5 rounded-lg text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+                style={{ background: "var(--gradient-impact)", fontFamily: "Montserrat, sans-serif" }}>
+                Save Changes
+              </button>
+            </form>
+          </div>
+        )}
+
         {showQR && <QRModal animalId={submitted.id} onClose={() => setShowQR(false)} />}
       </div>
     );
@@ -1107,7 +1406,7 @@ function RegisterAnimal({ addAnimal }: { addAnimal: ReturnType<typeof useDataSer
         </InputField>
 
         <InputField label="Breeder Name" required>
-          <input className={inputCls} placeholder="e.g. Haji Kareem Baloch" required
+          <input className={inputCls} placeholder="e.g. GreenMeadow" required
             value={form.breeder_name} onChange={e => setForm(f => ({ ...f, breeder_name: e.target.value }))} />
         </InputField>
 
@@ -1127,11 +1426,11 @@ function RegisterAnimal({ addAnimal }: { addAnimal: ReturnType<typeof useDataSer
           </button>
         </InputField>
 
-        <InputField label={`Gender (${sm.label})`} required>
+        <InputField label="Gender" required>
           <select className={inputCls} value={form.gender}
             onChange={e => setForm(f => ({ ...f, gender: e.target.value as "Male" | "Female" }))}>
-            <option value="Male">Male ({sm.male})</option>
-            <option value="Female">Female ({sm.female})</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
           </select>
         </InputField>
 
@@ -1156,167 +1455,129 @@ function RegisterAnimal({ addAnimal }: { addAnimal: ReturnType<typeof useDataSer
   );
 }
 
-// ─── Record Event Tab ─────────────────────────────────────────────────────────
+// ─── Activities Tab ───────────────────────────────────────────────────────────
+// Read-only feed of every lifecycle event across all animals, organized by
+// breed/species first, newest activity first within each breed.
+// Adding events still happens per-animal on the detail page.
 
-function RecordEvent({ animals, addEvent, allowedEventTypes }: {
-  animals: Animal[];
-  addEvent: ReturnType<typeof useDataService>["addEvent"];
-  allowedEventTypes?: EventType[];
+function ActivitiesFeed({ animals, events, onAnimalClick }: {
+  animals: Animal[]; events: AnimalEvent[]; onAnimalClick: (a: Animal) => void;
 }) {
-  const [animalId, setAnimalId] = useState("");
-  const [eventType, setEventType] = useState<EventType>("Health Check");
-  const [form, setForm] = useState({
-    event_date: new Date().toISOString().split("T")[0],
-    location: "",
-    lat: undefined as number | undefined,
-    lng: undefined as number | undefined,
-    notes: "",
-    previous_owner: "",
-    transfer_condition: TRANSFER_CONDITIONS[0],
-  });
-  const [gpsLoading, setGpsLoading] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [showQR, setShowQR] = useState(false);
+  const [speciesFilter, setSpeciesFilter] = useState<Species | "all">("all");
 
-  const isTransfer = eventType === "Transfer to MCF Farm";
+  const animalById = useMemo(() => {
+    const map = new Map<string, Animal>();
+    animals.forEach(a => map.set(a.id, a));
+    return map;
+  }, [animals]);
 
-  const captureGPS = () => {
-    setGpsLoading(true);
-    navigator.geolocation.getCurrentPosition(
-      pos => { setForm(f => ({ ...f, lat: pos.coords.latitude, lng: pos.coords.longitude })); setGpsLoading(false); },
-      () => setGpsLoading(false), { timeout: 8000 }
-    );
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!animalId || !form.event_date || !form.location) return;
-    addEvent({
-      animal_id: animalId,
-      event_type: eventType,
-      event_date: form.event_date,
-      location: form.location,
-      lat: form.lat,
-      lng: form.lng,
-      notes: form.notes,
-      previous_owner: isTransfer ? form.previous_owner : undefined,
-      transfer_condition: isTransfer ? form.transfer_condition : undefined,
+  // Group every event by the species/breed of the animal it belongs to
+  const groupsBySpecies = useMemo(() => {
+    const map = new Map<Species, AnimalEvent[]>();
+    events.forEach(evt => {
+      const animal = animalById.get(evt.animal_id);
+      if (!animal) return;
+      if (!map.has(animal.species)) map.set(animal.species, []);
+      map.get(animal.species)!.push(evt);
     });
-    setSubmitted(true);
-  };
+    map.forEach(list => list.sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime()));
+    return SPECIES_LIST
+      .filter(sp => map.has(sp) && (speciesFilter === "all" || speciesFilter === sp))
+      .map(sp => ({ species: sp, evts: map.get(sp)! }));
+  }, [events, animalById, speciesFilter]);
 
-  const selectedAnimal = animals.find(a => a.id === animalId);
-
-  if (submitted) {
-    return (
-      <div className="px-4 py-6 space-y-4">
-        <div className="rounded-xl p-5 text-white text-center" style={{ background: "var(--gradient-impact)" }}>
-          <CheckCircle2 size={40} className="mx-auto mb-2 opacity-90" />
-          <h2 className="text-lg font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>Event Recorded</h2>
-          <p className="text-sm opacity-80 mt-1">History updated · immutable record added</p>
-        </div>
-        {selectedAnimal && (isTransfer || eventType === "Quarantine Start") && (
-          <Card className="text-center">
-            <p className="text-sm text-muted-foreground mb-3">Generate updated QR for this animal?</p>
-            <button onClick={() => setShowQR(true)}
-              className="flex items-center justify-center gap-2 mx-auto px-5 py-2.5 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
-              style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
-              <ScanLine size={16} /> View QR Code
-            </button>
-          </Card>
-        )}
-        <button onClick={() => { setSubmitted(false); setAnimalId(""); setEventType("Health Check"); setForm({ event_date: new Date().toISOString().split("T")[0], location: "", lat: undefined, lng: undefined, notes: "", previous_owner: "", transfer_condition: TRANSFER_CONDITIONS[0] }); }}
-          className="w-full py-3 rounded-xl border border-border font-semibold text-sm hover:bg-muted transition-colors"
-          style={{ fontFamily: "Montserrat, sans-serif" }}>
-          Record Another Event
-        </button>
-        {showQR && selectedAnimal && <QRModal animalId={selectedAnimal.id} onClose={() => setShowQR(false)} />}
-      </div>
-    );
-  }
+  const presentSpecies = useMemo(() => {
+    const s = new Set(animals.map(a => a.species));
+    return SPECIES_LIST.filter(sp => s.has(sp));
+  }, [animals]);
 
   return (
     <div>
       <div className="px-4 pt-5 pb-4 md:hidden" style={{ background: "var(--gradient-primary)" }}>
-        <h1 className="text-white text-lg font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>Record Event</h1>
-        <p className="text-white/60 text-xs mt-0.5">
-          {allowedEventTypes
-            ? `Veterinarian access · ${allowedEventTypes.join(", ")}`
-            : "Log a lifecycle event for an existing animal"}
-        </p>
+        <h1 className="text-white text-lg font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>Activities</h1>
+        <p className="text-white/60 text-xs mt-0.5">Lifecycle events grouped by breed, newest first</p>
       </div>
-      <form onSubmit={handleSubmit} className="px-4 py-4 space-y-4 pb-8 md:max-w-2xl md:mx-auto md:px-8 md:py-8">
-        <InputField label="Select Animal" required>
-          <select className={inputCls} value={animalId} onChange={e => setAnimalId(e.target.value)} required>
-            <option value="">— Choose an animal —</option>
-            {animals.map(a => (
-              <option key={a.id} value={a.id}>
-                {SPECIES_META[a.species].emoji} {a.id} · {STATUS_META[a.status].label}
-              </option>
-            ))}
-          </select>
-          {selectedAnimal && (
-            <p className="text-xs text-muted-foreground mt-1">
-              {selectedAnimal.breeder_name} · {selectedAnimal.color}
-            </p>
+      <div className="hidden md:block px-6 pt-6 pb-2">
+        <h1 className="text-foreground text-xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>Activities</h1>
+        <p className="text-muted-foreground text-sm mt-0.5">Lifecycle events grouped by breed, newest first</p>
+      </div>
+
+      {/* Species filter */}
+      <div className="flex gap-2 px-4 md:px-6 py-3 overflow-x-auto scrollbar-hide border-b border-border">
+        <button
+          onClick={() => setSpeciesFilter("all")}
+          className={cn(
+            "px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all",
+            speciesFilter === "all" ? "text-white" : "bg-white border border-border text-foreground hover:bg-muted"
           )}
-        </InputField>
-
-        <InputField label="Event Type" required>
-          <select className={inputCls} value={eventType}
-            onChange={e => setEventType(e.target.value as EventType)}>
-            {(Object.keys(EVENT_META) as EventType[])
-              .filter(t => t !== "Birth Registered")
-              .filter(t => !allowedEventTypes || allowedEventTypes.includes(t))
-              .map(t => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-        </InputField>
-
-        {isTransfer && (
-          <>
-            <InputField label="Previous Owner / Breeder">
-              <input className={inputCls} placeholder="Name of previous breeder"
-                value={form.previous_owner} onChange={e => setForm(f => ({ ...f, previous_owner: e.target.value }))} />
-            </InputField>
-            <InputField label="Animal Condition on Transfer">
-              <select className={inputCls} value={form.transfer_condition}
-                onChange={e => setForm(f => ({ ...f, transfer_condition: e.target.value }))}>
-                {TRANSFER_CONDITIONS.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </InputField>
-          </>
-        )}
-
-        <InputField label="Event Date" required>
-          <input type="date" className={inputCls} required
-            value={form.event_date} onChange={e => setForm(f => ({ ...f, event_date: e.target.value }))} />
-        </InputField>
-
-        <InputField label="Location" required>
-          <input className={inputCls} placeholder="e.g. MCF Central Farm, Turbat" required
-            value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} />
-          <button type="button" onClick={captureGPS}
-            className="flex items-center gap-1.5 mt-1 text-accent text-xs font-semibold"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>
-            <MapPin size={14} />
-            {gpsLoading ? "Getting location…" : form.lat ? `GPS: ${form.lat.toFixed(4)}, ${form.lng?.toFixed(4)}` : "Use GPS Location"}
-          </button>
-        </InputField>
-
-        <InputField label="Notes / Observations">
-          <textarea className={cn(inputCls, "resize-none min-h-[80px]")} rows={3}
-            placeholder="Observations, vet notes, conditions…"
-            value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
-        </InputField>
-
-        <button type="submit"
-          className="w-full py-3.5 rounded-xl text-white font-bold text-sm hover:opacity-90 transition-opacity"
-          style={{ background: "var(--gradient-impact)", fontFamily: "Montserrat, sans-serif" }}>
-          Record Event & Update History
+          style={{ fontFamily: "Montserrat, sans-serif", background: speciesFilter === "all" ? "var(--gradient-primary)" : undefined }}>
+          All ({events.length})
         </button>
-      </form>
+        {presentSpecies.map(sp => (
+          <SpeciesChip key={sp} species={sp}
+            active={speciesFilter === sp}
+            onClick={() => setSpeciesFilter(speciesFilter === sp ? "all" : sp)} />
+        ))}
+      </div>
+
+      <div className="px-4 md:px-6 py-3 pb-8 space-y-6">
+        {groupsBySpecies.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground text-sm">No activity yet</div>
+        )}
+        {groupsBySpecies.map(({ species, evts }) => {
+          const sm = SPECIES_META[species];
+          return (
+            <div key={species}>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-lg">{sm.emoji}</span>
+                <h2 className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                  {sm.label}
+                </h2>
+                <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full"
+                  style={{ fontFamily: "Montserrat, sans-serif" }}>
+                  {evts.length} {evts.length === 1 ? "activity" : "activities"}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {evts.map(evt => {
+                  const animal = animalById.get(evt.animal_id);
+                  if (!animal) return null;
+                  const em = EVENT_META[evt.event_type];
+                  const Icon = em.icon;
+                  return (
+                    <Card key={evt.id} onClick={() => onAnimalClick(animal)} className="flex items-start gap-3">
+                      <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                        style={{ backgroundColor: em.color + "18" }}>
+                        <Icon size={16} style={{ color: em.color }} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                            {evt.event_type}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground flex-shrink-0">
+                            {formatDate(evt.event_date)} · {new Date(evt.recorded_at).toLocaleTimeString("en-PK", { hour: "numeric", minute: "2-digit" })}
+                          </p>
+                        </div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                          <span className="font-mono">{animal.id}</span>
+                          <span>· {animal.breeder_name}</span>
+                        </p>
+                        <p className="text-xs text-accent font-semibold flex items-center gap-1 mt-0.5">
+                          <User size={11} /> {evt.recorded_by}
+                        </p>
+                        {evt.notes && (
+                          <p className="text-xs text-muted-foreground mt-0.5 italic">"{evt.notes}"</p>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1326,8 +1587,12 @@ function RecordEvent({ animals, addEvent, allowedEventTypes }: {
 function SearchScan({ animals, events, onAnimalClick }: {
   animals: Animal[]; events: AnimalEvent[]; onAnimalClick: (a: Animal) => void;
 }) {
+  const location = useLocation();
+  const initialStatus = (location.state as { statusFilter?: AnimalStatus } | null)?.statusFilter;
+
   const [query, setQuery] = useState("");
   const [speciesFilter, setSpeciesFilter] = useState<Species | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<AnimalStatus | "all">(initialStatus ?? "all");
 
   const presentSpecies = useMemo(() => {
     const s = new Set(animals.map(a => a.species));
@@ -1340,9 +1605,10 @@ function SearchScan({ animals, events, onAnimalClick }: {
       const matchQuery = !q || a.id.toLowerCase().includes(q) ||
         a.breeder_name.toLowerCase().includes(q) || a.species.includes(q);
       const matchSpecies = speciesFilter === "all" || a.species === speciesFilter;
-      return matchQuery && matchSpecies;
+      const matchStatus = statusFilter === "all" || a.status === statusFilter;
+      return matchQuery && matchSpecies && matchStatus;
     });
-  }, [animals, query, speciesFilter]);
+  }, [animals, query, speciesFilter, statusFilter]);
 
   return (
     <div>
@@ -1387,6 +1653,34 @@ function SearchScan({ animals, events, onAnimalClick }: {
         ))}
       </div>
 
+      {/* Status filter */}
+      <div className="flex gap-2 px-4 md:px-6 py-3 overflow-x-auto scrollbar-hide border-b border-border">
+        <button
+          onClick={() => setStatusFilter("all")}
+          className={cn(
+            "px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all",
+            statusFilter === "all" ? "text-white" : "bg-white border border-border text-foreground hover:bg-muted"
+          )}
+          style={{ fontFamily: "Montserrat, sans-serif", background: statusFilter === "all" ? "var(--gradient-primary)" : undefined }}>
+          All Statuses
+        </button>
+        {(Object.keys(STATUS_META) as AnimalStatus[]).map(st => (
+          <button key={st}
+            onClick={() => setStatusFilter(statusFilter === st ? "all" : st)}
+            className={cn(
+              "px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all border",
+              statusFilter === st ? "border-transparent" : "bg-white border-border text-foreground hover:bg-muted"
+            )}
+            style={{
+              fontFamily: "Montserrat, sans-serif",
+              background: statusFilter === st ? STATUS_META[st].color : undefined,
+              color: statusFilter === st ? "#fff" : undefined,
+            }}>
+            {STATUS_META[st].label} ({animals.filter(a => a.status === st).length})
+          </button>
+        ))}
+      </div>
+
       {/* Results */}
       <div className="px-4 md:px-6 py-3 pb-8 space-y-2">
         {filtered.length === 0 && (
@@ -1406,163 +1700,94 @@ function SearchScan({ animals, events, onAnimalClick }: {
   );
 }
 
-// ── Expandable animal card with full tracking history ──────────────────────────
+// ── Clickable summary card — navigates to the full-screen animal record ────────
 
 function AnimalSearchCard({ animal, events, onViewFull }: {
   animal: Animal;
   events: AnimalEvent[];
   onViewFull: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const sm = SPECIES_META[animal.species];
   const latest = events[events.length - 1];
 
   return (
-    <div className="bg-card border border-border rounded-xl overflow-hidden transition-shadow hover:shadow-md animate-fadeInUp">
-      {/* Summary row */}
-      <button
-        className="w-full flex items-start gap-3 p-4 text-left"
-        onClick={() => setExpanded(p => !p)}
-      >
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-muted text-xl">
-          {sm.emoji}
+    <button
+      onClick={onViewFull}
+      className="w-full flex items-start gap-3 p-4 text-left bg-card border border-border rounded-xl transition-shadow hover:shadow-md animate-fadeInUp"
+    >
+      <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 bg-muted text-xl">
+        {sm.emoji}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="font-mono text-xs font-bold text-foreground">{animal.id}</p>
+          <StatusBadge status={animal.status} />
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="font-mono text-xs font-bold text-foreground">{animal.id}</p>
-            <StatusBadge status={animal.status} />
-          </div>
-          <p className="text-sm font-semibold text-foreground mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>
-            {animal.breeder_name}
+        <p className="text-sm font-semibold text-foreground mt-0.5" style={{ fontFamily: "Montserrat, sans-serif" }}>
+          {animal.breeder_name}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {animal.gender === "Male" ? sm.male : sm.female} · {animal.color} · Born {formatDate(animal.birth_date)}
+        </p>
+        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+          <MapPin size={10} className="flex-shrink-0" /> {animal.birth_location}
+        </p>
+        {latest && (
+          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+            <Clock size={11} />
+            Latest: {latest.event_type} · {formatDate(latest.event_date)} · {latest.recorded_by}
           </p>
-          <p className="text-xs text-muted-foreground">
-            {animal.gender === "Male" ? sm.male : sm.female} · {animal.color} · Born {formatDate(animal.birth_date)}
-          </p>
-          {latest && !expanded && (
-            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              <Clock size={11} />
-              Latest: {latest.event_type} · {formatDate(latest.event_date)} · {latest.recorded_by}
-            </p>
-          )}
-        </div>
-        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>
-            {events.length} events
-          </span>
-          <ChevronDown size={16} className={cn("text-muted-foreground transition-transform", expanded ? "rotate-180" : "")} />
-        </div>
-      </button>
-
-      {/* Expanded tracking history */}
-      {expanded && (
-        <div className="border-t border-border bg-muted/20 px-4 py-3 space-y-0 animate-fadeInUp">
-          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>Full Tracking History</p>
-
-          {events.map((evt, i) => {
-            const em = EVENT_META[evt.event_type];
-            const Icon = em.icon;
-            const isLast = i === events.length - 1;
-            return (
-              <div key={evt.id} className="flex gap-3">
-                {/* Timeline spine */}
-                <div className="flex flex-col items-center flex-shrink-0">
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center"
-                    style={{ backgroundColor: em.color + "18", border: `1.5px solid ${em.color}40` }}>
-                    <Icon size={13} style={{ color: em.color }} />
-                  </div>
-                  {!isLast && <div className="w-px flex-1 bg-border my-1 min-h-[12px]" />}
-                </div>
-
-                {/* Event detail */}
-                <div className={cn("pb-3 flex-1 min-w-0", isLast && "pb-1")}>
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-xs font-bold text-foreground leading-tight"
-                      style={{ fontFamily: "Montserrat, sans-serif" }}>{evt.event_type}</p>
-                    <p className="text-[10px] text-muted-foreground flex-shrink-0">{formatDate(evt.event_date)}</p>
-                  </div>
-
-                  {/* Who recorded it */}
-                  <p className="text-[11px] text-accent font-semibold mt-0.5 flex items-center gap-1">
-                    <User size={10} /> {evt.recorded_by}
-                  </p>
-
-                  {/* Location */}
-                  <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5">
-                    <MapPin size={10} className="flex-shrink-0" /> {evt.location}
-                    {evt.lat && <span className="font-mono ml-1 text-[10px]">({evt.lat.toFixed(3)}, {evt.lng?.toFixed(3)})</span>}
-                  </p>
-
-                  {/* Transfer details */}
-                  {evt.previous_owner && (
-                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                      From: <span className="font-medium text-foreground">{evt.previous_owner}</span>
-                      {evt.transferred_to && <> → <span className="font-medium text-foreground">{evt.transferred_to}</span></>}
-                    </p>
-                  )}
-                  {evt.transfer_condition && (
-                    <span className={cn(
-                      "inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded mt-0.5",
-                      evt.transfer_condition.includes("Good") ? "bg-muted text-secondary" :
-                      evt.transfer_condition === "Underweight" ? "bg-yellow-100 text-yellow-700" : "bg-orange-100 text-orange-700"
-                    )} style={{ fontFamily: "Montserrat, sans-serif" }}>
-                      {evt.transfer_condition}
-                    </span>
-                  )}
-
-                  {/* Notes */}
-                  {evt.notes && (
-                    <p className="text-[11px] text-muted-foreground mt-0.5 italic">"{evt.notes}"</p>
-                  )}
-
-                  {/* Timestamp */}
-                  <p className="text-[9px] text-muted-foreground/50 mt-0.5">
-                    Recorded {new Date(evt.recorded_at).toLocaleString("en-PK", { dateStyle: "medium", timeStyle: "short" })}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-
-          {/* View full page link */}
-          <button onClick={onViewFull}
-            className="w-full mt-2 py-2 rounded-lg text-xs font-bold text-white hover:opacity-90 transition-opacity flex items-center justify-center gap-1.5"
-            style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
-            <ScanLine size={13} /> Open Full Animal Record
-          </button>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+        <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-2 py-0.5 rounded-full"
+          style={{ fontFamily: "Montserrat, sans-serif" }}>
+          {events.length} events
+        </span>
+        <ChevronRight size={16} className="text-muted-foreground" />
+      </div>
+    </button>
   );
 }
 
 // ─── Reports Tab ──────────────────────────────────────────────────────────────
 
 function Reports({ animals, canExport = true }: { animals: Animal[]; canExport?: boolean }) {
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
+  const filteredAnimals = useMemo(() => {
+    if (!startDate && !endDate) return animals;
+    return animals.filter(a => {
+      if (startDate && a.birth_date < startDate) return false;
+      if (endDate && a.birth_date > endDate) return false;
+      return true;
+    });
+  }, [animals, startDate, endDate]);
+
   const statusData = useMemo(() => {
     const counts: Record<string, number> = {};
-    animals.forEach(a => {
+    filteredAnimals.forEach(a => {
       const label = STATUS_META[a.status].label;
       counts[label] = (counts[label] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [animals]);
+  }, [filteredAnimals]);
 
   const speciesData = useMemo(() => {
     const counts: Partial<Record<Species, number>> = {};
-    animals.forEach(a => { counts[a.species] = (counts[a.species] || 0) + 1; });
+    filteredAnimals.forEach(a => { counts[a.species] = (counts[a.species] || 0) + 1; });
     return (Object.entries(counts) as [Species, number][]).map(([sp, count]) => ({
       name: `${SPECIES_META[sp].emoji} ${SPECIES_META[sp].label}`,
       count,
     }));
-  }, [animals]);
+  }, [filteredAnimals]);
 
   const PIE_COLORS = ["#2D7DD2", "#182951", "#9E9E9E", "#2FB572", "#d4183d"];
 
   const exportCSV = () => {
     const headers = ["ID", "Species", "Birth Date", "Breeder", "Location", "Gender", "Color", "Status", "Created At"];
-    const rows = animals.map(a => [
+    const rows = filteredAnimals.map(a => [
       a.id, a.species, a.birth_date, a.breeder_name, a.birth_location,
       a.gender, a.color, a.status, a.created_at
     ]);
@@ -1573,14 +1798,6 @@ function Reports({ animals, canExport = true }: { animals: Animal[]; canExport?:
     a.href = url; a.download = "mcf-animals.csv"; a.click();
   };
 
-  const exportJSON = () => {
-    const data = JSON.stringify({ animals, exported_at: new Date().toISOString() }, null, 2);
-    const blob = new Blob([data], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "mcf-backup.json"; a.click();
-  };
-
   return (
     <div>
       <div className="px-4 pt-5 pb-4 md:hidden" style={{ background: "var(--gradient-primary)" }}>
@@ -1588,20 +1805,40 @@ function Reports({ animals, canExport = true }: { animals: Animal[]; canExport?:
         <p className="text-white/60 text-xs mt-0.5">Live summary across all animals</p>
       </div>
       <div className="px-4 md:px-6 py-4 md:py-6 space-y-4 md:space-y-6 pb-8">
+        {/* Date range filter */}
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <Clock size={15} className="text-muted-foreground" />
+            <h3 className="text-sm font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>Date Range</h3>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+            <InputField label="From (Birth Date)">
+              <input type="date" className={inputCls} value={startDate} onChange={e => setStartDate(e.target.value)} />
+            </InputField>
+            <InputField label="To (Birth Date)">
+              <input type="date" className={inputCls} value={endDate} onChange={e => setEndDate(e.target.value)} />
+            </InputField>
+            {(startDate || endDate) && (
+              <button onClick={() => { setStartDate(""); setEndDate(""); }}
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg border border-border text-sm font-semibold hover:bg-muted transition-colors whitespace-nowrap"
+                style={{ fontFamily: "Montserrat, sans-serif" }}>
+                <X size={14} /> Clear
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-3">
+            Showing <span className="font-semibold text-foreground">{filteredAnimals.length}</span> of {animals.length} animals
+            {(startDate || endDate) ? " in the selected range." : "."}
+          </p>
+        </Card>
+
         {/* Summary cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-          <div className="rounded-xl p-4 text-white" style={{ background: "var(--gradient-impact)" }}>
-            <p className="text-3xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>
-              {new Set(animals.map(a => a.species)).size}
-            </p>
-            <p className="text-xs font-semibold mt-1 opacity-90" style={{ fontFamily: "Montserrat, sans-serif" }}>Species Tracked</p>
-            <p className="text-xs opacity-60">Across all registrations</p>
-          </div>
-          <div className="rounded-xl p-4 text-white" style={{ background: "var(--gradient-brand)" }}>
-            <p className="text-3xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>100%</p>
-            <p className="text-xs font-semibold mt-1 opacity-90" style={{ fontFamily: "Montserrat, sans-serif" }}>Traceability</p>
-            <p className="text-xs opacity-60">Every animal has QR + history</p>
-          </div>
+        <div className="rounded-xl p-4 text-white max-w-xs" style={{ background: "var(--gradient-impact)" }}>
+          <p className="text-3xl font-bold" style={{ fontFamily: "Montserrat, sans-serif" }}>
+            {new Set(filteredAnimals.map(a => a.species)).size}
+          </p>
+          <p className="text-xs font-semibold mt-1 opacity-90" style={{ fontFamily: "Montserrat, sans-serif" }}>Species Tracked</p>
+          <p className="text-xs opacity-60">Across all registrations</p>
         </div>
 
         <div className="md:grid md:grid-cols-2 md:gap-6">
@@ -1649,11 +1886,6 @@ function Reports({ animals, canExport = true }: { animals: Animal[]; canExport?:
               className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-white font-semibold text-sm hover:opacity-90 transition-opacity"
               style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
               <FileDown size={16} /> Export All Data (CSV)
-            </button>
-            <button onClick={exportJSON}
-              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border border-border font-semibold text-sm hover:bg-muted transition-colors"
-              style={{ fontFamily: "Montserrat, sans-serif" }}>
-              <Database size={16} /> Backup Data (JSON)
             </button>
           </div>
         ) : (
@@ -1705,9 +1937,11 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
   };
 
   return (
-    <div className="flex flex-col bg-background">
+    <div className="bg-background md:min-h-screen md:flex">
+      {/* Mobile layout — unchanged */}
+      <div className="flex flex-col md:hidden">
       {/* Hero header */}
-      <div className="flex-shrink-0 px-6 pt-12 pb-10 text-white relative overflow-hidden"
+      <div className="flex-shrink-0 px-6 pt-12 pb-10 text-white relative overflow-hidden farm-bg-pattern-light"
         style={{ background: "var(--gradient-primary)" }}>
         {/* Decorative rings */}
         <div className="absolute -right-12 -top-12 w-48 h-48 rounded-full border border-white/10" />
@@ -1718,7 +1952,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
           <div className="flex items-center gap-2 mb-4">
             <div className="w-10 h-10 rounded-xl flex items-center justify-center"
               style={{ background: "var(--gradient-impact)" }}>
-              <Shield size={20} className="text-white" />
+              <AppLogoIcon size={20} />
             </div>
             <div>
               <p className="text-white/60 text-xs font-medium" style={{ fontFamily: "Montserrat, sans-serif" }}>
@@ -1854,7 +2088,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
                     {rm.tabs.map(t => (
                       <span key={t} className="text-[10px] px-1.5 py-0.5 rounded-full bg-white border border-border text-muted-foreground font-medium capitalize"
                         style={{ fontFamily: "Montserrat, sans-serif" }}>
-                        {t === "event" ? "Events" : t === "register" ? "Register" : t.charAt(0).toUpperCase() + t.slice(1)}
+                        {t === "register" ? "Register" : t.charAt(0).toUpperCase() + t.slice(1)}
                       </span>
                     ))}
                   </div>
@@ -1868,6 +2102,175 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
         <p className="text-center text-xs text-muted-foreground pb-4">
           Track Now · Makuran Cattle Farm · v1.0
         </p>
+      </div>
+      </div>
+
+      {/* Desktop layout — split screen, branding left / form right */}
+      <div className="hidden md:flex md:w-full">
+        <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden text-white flex-col justify-between p-12 farm-bg-pattern-light"
+          style={{ background: "var(--gradient-primary)" }}>
+          <div className="absolute -right-24 -top-24 w-96 h-96 rounded-full border border-white/10" />
+          <div className="absolute -right-8 -top-8 w-64 h-64 rounded-full border border-white/10" />
+          <div className="absolute right-12 top-12 w-32 h-32 rounded-full bg-white/5" />
+
+          <div className="relative flex items-center gap-3">
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center"
+              style={{ background: "var(--gradient-impact)" }}>
+              <AppLogoIcon size={24} />
+            </div>
+            <div>
+              <p className="text-white/60 text-xs font-medium" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                Makuran Cattle Farm
+              </p>
+              <p className="text-white font-bold text-lg leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                Track Now
+              </p>
+            </div>
+          </div>
+
+          <div className="relative max-w-md">
+            <h1 className="text-4xl font-bold leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
+              Livestock traceability, end to end.
+            </h1>
+            <p className="text-white/70 text-base mt-4">
+              Register births, track lifecycle events, and trace every animal from breeder farm to final destination — with GPS-tagged records and QR-based lookups.
+            </p>
+            <div className="flex items-center gap-2 mt-8 flex-wrap">
+              {SPECIES_LIST.map(sp => (
+                <div key={sp} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 text-white text-xs font-semibold"
+                  style={{ fontFamily: "Montserrat, sans-serif" }}>
+                  <span>{SPECIES_META[sp].emoji}</span>
+                  <span>{SPECIES_META[sp].label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <p className="relative text-white/40 text-xs">Track Now · Makuran Cattle Farm · v1.0</p>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center px-6 py-10 overflow-y-auto md:max-h-screen">
+          <div className="w-full max-w-md">
+            <div className="mb-6 lg:hidden flex items-center gap-2">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                style={{ background: "var(--gradient-impact)" }}>
+                <AppLogoIcon size={20} />
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs font-medium" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                  Makuran Cattle Farm
+                </p>
+                <p className="text-foreground font-bold text-base leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                  Track Now
+                </p>
+              </div>
+            </div>
+
+            <h1 className="text-2xl font-bold leading-tight text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>
+              Welcome back
+            </h1>
+            <p className="text-muted-foreground text-sm mt-1 mb-6">
+              Sign in to access your livestock traceability dashboard
+            </p>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <InputField label="Email Address" required>
+                <input
+                  type="email"
+                  className={inputCls}
+                  placeholder="your@email.com"
+                  value={email}
+                  autoComplete="username"
+                  onChange={e => { setEmail(e.target.value); setError(""); }}
+                  required
+                />
+              </InputField>
+
+              <InputField label="Password" required>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    className={cn(inputCls, "pr-11")}
+                    placeholder="Enter your password"
+                    value={password}
+                    autoComplete="current-password"
+                    onChange={e => { setPassword(e.target.value); setError(""); }}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(p => !p)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </InputField>
+
+              {error && (
+                <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2.5 text-destructive text-sm animate-fadeInUp">
+                  <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3.5 rounded-xl text-white font-bold text-sm transition-opacity hover:opacity-90 disabled:opacity-60"
+                style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}
+              >
+                {loading ? "Signing in…" : "Sign In"}
+              </button>
+            </form>
+
+            {/* Demo accounts */}
+            <div className="border border-border rounded-xl overflow-hidden mt-4">
+              <button
+                onClick={() => setShowDemo(p => !p)}
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-foreground hover:bg-muted transition-colors"
+                style={{ fontFamily: "Montserrat, sans-serif" }}
+              >
+                <span className="flex items-center gap-2">
+                  <Users size={15} />
+                  Demo Accounts
+                </span>
+                <ChevronDown size={15} className={cn("transition-transform", showDemo ? "rotate-180" : "")} />
+              </button>
+
+              {showDemo && (
+                <div className="border-t border-border divide-y divide-border animate-fadeInUp">
+                  {DEMO_USERS.map(u => {
+                    const rm = ROLE_META[u.role];
+                    return (
+                      <button
+                        key={u.id}
+                        onClick={() => loginAs(u)}
+                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted transition-colors text-left"
+                      >
+                        <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
+                          style={{ background: rm.bg, color: rm.color, fontFamily: "Montserrat, sans-serif" }}>
+                          {u.avatar}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-foreground truncate" style={{ fontFamily: "Montserrat, sans-serif" }}>
+                            {u.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                        </div>
+                        <RoleBadge role={u.role} />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <p className="text-center text-xs text-muted-foreground mt-6">
+              Track Now · Makuran Cattle Farm · v1.0
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1893,10 +2296,12 @@ function RoleIcon({ role, size = 16, color }: { role: Role; size?: number; color
 
 // ─── Profile Screen ───────────────────────────────────────────────────────────
 
-function ProfileScreen({ user, onLogout, onPasswordChange }: {
+function ProfileScreen({ user, onLogout, onPasswordChange, isFullscreen, toggleFullscreen }: {
   user: AuthUser;
   onLogout: () => void;
   onPasswordChange: (current: string, next: string) => string | null;
+  isFullscreen: boolean;
+  toggleFullscreen: () => void;
 }) {
   const rm = ROLE_META[user.role];
   const navigate = useNavigate();
@@ -2040,8 +2445,8 @@ function ProfileScreen({ user, onLogout, onPasswordChange }: {
           </div>
           {[
             { icon: KeyRound, label: "Change Password", sub: "Update your login password", action: () => setSection("password") },
-            { icon: Bell,     label: "Notifications",   sub: "Manage alerts and sync notifications", action: () => {} },
-            { icon: Settings, label: "App Preferences", sub: "Language, display, and field defaults", action: () => {} },
+            { icon: isFullscreen ? Minimize : Maximize, label: isFullscreen ? "Exit Full Screen" : "Full Screen Mode",
+              sub: isFullscreen ? "Show browser bars again" : "Hide browser bars for a kiosk-style view", action: toggleFullscreen },
           ].map(({ icon: Icon, label, sub, action }) => (
             <button key={label} onClick={action}
               className="w-full flex items-center gap-3 px-4 py-3 border-b border-border last:border-0 hover:bg-muted/30 transition-colors text-left">
@@ -2081,26 +2486,26 @@ function ProfileScreen({ user, onLogout, onPasswordChange }: {
 // ─── Route ↔ Tab mapping ──────────────────────────────────────────────────────
 
 const ROUTE_TO_TAB: Record<string, Tab> = {
-  "/dashboard": "dashboard",
-  "/events":    "event",
-  "/register":  "register",
-  "/scan":      "search",
-  "/reports":   "reports",
-  "/profile":   "profile",
+  "/dashboard":   "dashboard",
+  "/register":    "register",
+  "/activities":  "activities",
+  "/scan":        "search",
+  "/reports":     "reports",
+  "/profile":     "profile",
 };
 const TAB_TO_ROUTE: Record<Tab, string> = {
-  dashboard: "/dashboard",
-  event:     "/events",
-  register:  "/register",
-  search:    "/scan",
-  reports:   "/reports",
-  profile:   "/profile",
+  dashboard:  "/dashboard",
+  register:   "/register",
+  activities: "/activities",
+  search:     "/scan",
+  reports:    "/reports",
+  profile:    "/profile",
 };
 
-// Nav layout: Home | Events | [+FAB] | Scan | Reports | Profile
+// Nav layout: Home | Activities | [+FAB] | Scan | Reports | Profile
 const LEFT_NAV:  { tab: Tab; path: string; icon: typeof LayoutDashboard; label: string }[] = [
-  { tab: "dashboard", path: "/dashboard", icon: LayoutDashboard, label: "Home" },
-  { tab: "event",     path: "/events",    icon: ClipboardList,   label: "Events" },
+  { tab: "dashboard",   path: "/dashboard",   icon: LayoutDashboard, label: "Home" },
+  { tab: "activities",  path: "/activities",  icon: ClipboardList,  label: "Activities" },
 ];
 const RIGHT_NAV: { tab: Tab; path: string; icon: typeof LayoutDashboard; label: string }[] = [
   { tab: "search",  path: "/scan",    icon: Search, label: "Scan" },
@@ -2114,6 +2519,14 @@ const GLOBAL_STYLES = `
   .animate-scaleIn   { animation: scaleIn  0.25s ease both; }
   .scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
   .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .farm-bg-pattern {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='84'%3E%3Cg fill='%23182951' fill-opacity='0.05'%3E%3Cellipse cx='42' cy='49' rx='10' ry='13'/%3E%3Cellipse cx='29' cy='32' rx='4.2' ry='5.2'/%3E%3Cellipse cx='42' cy='26' rx='4.6' ry='5.6'/%3E%3Cellipse cx='55' cy='32' rx='4.2' ry='5.2'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: 84px 84px;
+  }
+  .farm-bg-pattern-light {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='84' height='84'%3E%3Cg fill='%23ffffff' fill-opacity='0.07'%3E%3Cellipse cx='42' cy='49' rx='10' ry='13'/%3E%3Cellipse cx='29' cy='32' rx='4.2' ry='5.2'/%3E%3Cellipse cx='42' cy='26' rx='4.6' ry='5.6'/%3E%3Cellipse cx='55' cy='32' rx='4.2' ry='5.2'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: 84px 84px;
+  }
 `;
 
 // ─── App Shell (uses router hooks) ───────────────────────────────────────────
@@ -2129,7 +2542,7 @@ function AppShell() {
     } catch { return null; }
   });
   const data = useDataService();
-  const { animals, events, addAnimal, addEvent, getAnimalEvents, isOnline } = data;
+  const { animals, events, addAnimal, addEvent, updateAnimal, getAnimalEvents, isOnline } = data;
 
   // Derive active tab from current URL path
   const activeTab: Tab = ROUTE_TO_TAB[location.pathname] ?? "dashboard";
@@ -2141,8 +2554,7 @@ function AppShell() {
   const handleLogin = useCallback((user: AuthUser) => {
     setCurrentUser(user);
     localStorage.setItem("mcf_session", JSON.stringify(user));
-    const onboarded = localStorage.getItem("mcf_onboarded");
-    navigate(onboarded ? "/dashboard" : "/onboarding", { replace: true });
+    navigate("/dashboard", { replace: true });
   }, [navigate]);
 
 
@@ -2163,14 +2575,32 @@ function AppShell() {
     navigate(`/animal/${animal.id}`);
   }, [navigate]);
 
+  const handleStatusClick = useCallback((status: AnimalStatus) => {
+    navigate("/scan", { state: { statusFilter: status } });
+  }, [navigate]);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    }
+  }, []);
+
   // ── Not logged in → show login ──
   if (!currentUser) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100 md:bg-muted/30"
+      <div className="flex items-center justify-center min-h-screen bg-gray-100 md:bg-background farm-bg-pattern"
         style={{ fontFamily: "Manrope, sans-serif" }}>
-        <div className="relative w-full max-w-[430px] md:max-w-md md:h-auto md:rounded-2xl md:shadow-2xl bg-background flex flex-col overflow-hidden shadow-2xl md:my-8"
+        <div className="relative w-full max-w-[430px] md:max-w-none md:h-auto shadow-2xl md:shadow-none bg-background flex flex-col overflow-hidden md:my-0"
           style={{ fontFamily: "Manrope, sans-serif" }}>
-          <div className="overflow-y-auto scrollbar-hide">
+          <div className="overflow-y-auto scrollbar-hide md:overflow-visible">
             <LoginScreen onLogin={handleLogin} />
           </div>
         </div>
@@ -2183,14 +2613,16 @@ function AppShell() {
   const allowedTabs = rm.tabs;
   const canRegister = rm.canWrite;
 
-  // Redirect unknown paths to dashboard (/ and /login are handled by the routes below)
+  // Redirect unknown paths to dashboard (/ and /login are handled by the routes below;
+  // /animal/:id is a dynamic route and never appears in ROUTE_TO_TAB)
   const isLoginPath = location.pathname === "/" || location.pathname === "/login";
-  if (!ROUTE_TO_TAB[location.pathname] && !isLoginPath) {
+  const isAnimalDetailPath = location.pathname.startsWith("/animal/");
+  if (!ROUTE_TO_TAB[location.pathname] && !isLoginPath && !isAnimalDetailPath) {
     return <Navigate to="/dashboard" replace />;
   }
 
   const PAGE_TITLES: Record<string, string> = {
-    "/dashboard": "Dashboard", "/events": "Record Event", "/register": "Register Animal",
+    "/dashboard": "Dashboard", "/activities": "Activities", "/register": "Register Animal",
     "/scan": "Search & Scan", "/reports": "Reports", "/profile": "Profile",
   };
   const pageTitle = location.pathname.startsWith("/animal/")
@@ -2200,7 +2632,7 @@ function AppShell() {
   const ALL_NAV = [...LEFT_NAV, ...RIGHT_NAV];
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden" style={{ fontFamily: "Manrope, sans-serif" }}>
+    <div className="flex h-screen bg-background overflow-hidden farm-bg-pattern" style={{ fontFamily: "Manrope, sans-serif" }}>
 
       {/* ── DESKTOP SIDEBAR ── */}
       <aside className="hidden md:flex md:flex-col w-60 flex-shrink-0 border-r border-border bg-white">
@@ -2209,7 +2641,7 @@ function AppShell() {
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
               style={{ background: "rgba(255,255,255,0.15)" }}>
-              <Shield size={18} className="text-white" />
+              <AppLogoIcon size={18} />
             </div>
             <div>
               <p className="text-white font-bold text-sm leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
@@ -2317,6 +2749,10 @@ function AppShell() {
             <p className="text-xs text-muted-foreground">Makuran Cattle Farm Traceability Platform</p>
           </div>
           <div className="flex items-center gap-3">
+            <button onClick={toggleFullscreen} title={isFullscreen ? "Exit full screen" : "Enter full screen"}
+              className="p-2 rounded-xl border border-border text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+              {isFullscreen ? <Minimize size={17} /> : <Maximize size={17} />}
+            </button>
             {canRegister && (
               <button onClick={() => goTo("register")}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-white text-sm font-semibold hover:opacity-90 transition-opacity"
@@ -2327,27 +2763,6 @@ function AppShell() {
           </div>
         </header>
 
-        {/* Mobile status bar (hidden on desktop) */}
-        <div className="md:hidden flex-shrink-0 flex items-center justify-between px-4 py-2 bg-white border-b border-border">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0"
-              style={{ background: rm.bg, color: rm.color, fontFamily: "Montserrat, sans-serif" }}>
-              {currentUser.avatar}
-            </div>
-            <div className="leading-tight">
-              <p className="text-xs font-bold text-foreground" style={{ fontFamily: "Montserrat, sans-serif" }}>{currentUser.name}</p>
-              <p className="text-[10px] text-muted-foreground">{rm.label}</p>
-            </div>
-          </div>
-          <div className={cn(
-            "flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full",
-            isOnline ? "bg-muted text-secondary" : "bg-yellow-100 text-yellow-700"
-          )} style={{ fontFamily: "Montserrat, sans-serif" }}>
-            <span className={cn("w-1.5 h-1.5 rounded-full animate-pulse", isOnline ? "bg-secondary" : "bg-yellow-400")} />
-            {isOnline ? "Synced" : "Offline"}
-          </div>
-        </div>
-
         {/* ── Routed content ── */}
         <DataCtx.Provider value={data}>
           <div className="flex-1 overflow-y-auto scrollbar-hide">
@@ -2355,17 +2770,15 @@ function AppShell() {
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/login" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={
-                <Dashboard animals={animals} events={events} isOnline={isOnline} onAnimalClick={handleAnimalClick} />
-              } />
-              <Route path="/events" element={
-                rm.canRecordEvents
-                  ? <RecordEvent animals={animals} addEvent={addEvent} allowedEventTypes={rm.eventTypes} />
-                  : <LockedSection role={rm.label} />
+                <Dashboard animals={animals} events={events} isOnline={isOnline} onAnimalClick={handleAnimalClick} onStatusClick={handleStatusClick} />
               } />
               <Route path="/register" element={
                 canRegister
-                  ? <RegisterAnimal addAnimal={addAnimal} />
+                  ? <RegisterAnimal addAnimal={addAnimal} updateAnimal={updateAnimal} recordedBy={currentUser.name} />
                   : <LockedSection role={rm.label} />
+              } />
+              <Route path="/activities" element={
+                <ActivitiesFeed animals={animals} events={events} onAnimalClick={handleAnimalClick} />
               } />
               <Route path="/scan" element={
                 <SearchScan animals={animals} events={events} onAnimalClick={handleAnimalClick} />
@@ -2376,9 +2789,13 @@ function AppShell() {
                   : <LockedSection role={rm.label} />
               } />
               <Route path="/profile" element={
-                <ProfileScreen user={currentUser} onLogout={handleLogout} onPasswordChange={handlePasswordChange} />
+                <ProfileScreen user={currentUser} onLogout={handleLogout} onPasswordChange={handlePasswordChange}
+                  isFullscreen={isFullscreen} toggleFullscreen={toggleFullscreen} />
               } />
-              <Route path="/animal/:animalId" element={<AnimalDetailPage />} />
+              <Route path="/animal/:animalId" element={
+                <AnimalDetailPage canEdit={rm.canWrite} recordedBy={currentUser.name}
+                  canRecordEvents={rm.canRecordEvents} allowedEventTypes={rm.eventTypes} />
+              } />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </div>
@@ -2456,125 +2873,6 @@ function AppShell() {
   );
 }
 
-// ─── Onboarding Flow (/#/onboarding) ─────────────────────────────────────────
-
-const ONBOARDING_STEPS = [
-  {
-    emoji: "🐄",
-    title: "Register at Birth",
-    body: "When an animal is born at a breeder's farm, open Track Now and tap the green + button. Fill in species, breeder name, location, and gender — the app auto-generates a unique ID like MCF-CTL-202606-001.",
-    cta: "Next",
-    gradient: "var(--gradient-primary)",
-  },
-  {
-    emoji: "📱",
-    title: "QR Code Generated",
-    body: "Every registration instantly produces a QR code encoding the animal's ID. Print it as a tag, attach it to the animal, and anyone on the farm can scan it to pull the full history.",
-    cta: "Next",
-    gradient: "var(--gradient-brand)",
-  },
-  {
-    emoji: "📋",
-    title: "Record Lifecycle Events",
-    body: "As the animal moves — transfer to the central farm, quarantine start and end, vet health checks — tap Events and log it. Every entry is permanent and timestamped. History is never edited, only added to.",
-    cta: "Next",
-    gradient: "var(--gradient-impact)",
-  },
-  {
-    emoji: "🔍",
-    title: "Search & Scan Anywhere",
-    body: "Use the Scan tab to search by animal ID, breeder name, or species. Tap any result to see the full timeline. The Simulate Scan button shows how QR scanning will work in the field.",
-    cta: "Next",
-    gradient: "var(--gradient-primary)",
-  },
-  {
-    emoji: "📊",
-    title: "Reports & Exports",
-    body: "The Reports tab shows live charts — status distribution, species breakdown, and 100% traceability coverage. Administrators and Farm Managers can export all data as CSV or JSON for records.",
-    cta: "Start Using Track Now",
-    gradient: "var(--gradient-brand)",
-  },
-];
-
-function OnboardingPage() {
-  const navigate = useNavigate();
-  const [step, setStep] = useState(0);
-  const current = ONBOARDING_STEPS[step];
-  const isLast = step === ONBOARDING_STEPS.length - 1;
-
-  const handleNext = () => {
-    if (isLast) {
-      localStorage.setItem("mcf_onboarded", "1");
-      navigate("/login");
-    } else {
-      setStep(s => s + 1);
-    }
-  };
-
-  return (
-    <div className="min-h-screen flex flex-col bg-background" style={{ fontFamily: "Manrope, sans-serif" }}>
-      {/* Skip */}
-      <div className="flex items-center justify-between px-5 pt-5 pb-2 max-w-[430px] mx-auto w-full">
-        <button onClick={() => navigate("/")}
-          className="text-xs text-muted-foreground font-semibold hover:text-foreground transition-colors"
-          style={{ fontFamily: "Montserrat, sans-serif" }}>
-          ← Back
-        </button>
-        {!isLast && (
-          <button onClick={() => { localStorage.setItem("mcf_onboarded", "1"); navigate("/login"); }}
-            className="text-xs text-muted-foreground font-semibold hover:text-foreground transition-colors"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>
-            Skip
-          </button>
-        )}
-      </div>
-
-      {/* Step card */}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 py-6 max-w-[430px] mx-auto w-full">
-        {/* Illustration area */}
-        <div className="w-36 h-36 rounded-3xl flex items-center justify-center mb-8 shadow-lg animate-scaleIn"
-          style={{ background: current.gradient }}>
-          <span className="text-6xl">{current.emoji}</span>
-        </div>
-
-        {/* Step indicator */}
-        <div className="flex gap-2 mb-6">
-          {ONBOARDING_STEPS.map((_, i) => (
-            <button key={i} onClick={() => setStep(i)}
-              className={cn(
-                "h-1.5 rounded-full transition-all duration-300",
-                i === step ? "w-8 bg-secondary" : i < step ? "w-3 bg-secondary/40" : "w-3 bg-border"
-              )} />
-          ))}
-        </div>
-
-        <div className="text-center animate-fadeInUp" key={step}>
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>
-            Step {step + 1} of {ONBOARDING_STEPS.length}
-          </p>
-          <h2 className="text-2xl font-bold text-foreground mb-4 leading-tight"
-            style={{ fontFamily: "Montserrat, sans-serif" }}>
-            {current.title}
-          </h2>
-          <p className="text-sm text-muted-foreground leading-relaxed max-w-[320px] mx-auto">
-            {current.body}
-          </p>
-        </div>
-      </div>
-
-      {/* CTA */}
-      <div className="px-6 pb-10 max-w-[430px] mx-auto w-full">
-        <button onClick={handleNext}
-          className="w-full py-4 rounded-2xl font-bold text-white text-sm hover:opacity-90 transition-all active:scale-[0.98]"
-          style={{ background: current.gradient, fontFamily: "Montserrat, sans-serif",
-            boxShadow: "0 4px 20px rgba(24,41,81,0.25)" }}>
-          {current.cta} {!isLast && "→"}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ─── 404 Not Found Page (/#/*) ────────────────────────────────────────────────
 
@@ -2633,24 +2931,102 @@ function NotFoundPage() {
   );
 }
 
+// ─── Site Password Gate (prototype-wide access lock) ──────────────────────────
+
+const SITE_PASSWORD = "Abcd@4321";
+const SITE_UNLOCK_KEY = "mcf_site_unlocked";
+
+function SitePasswordGate({ children }: { children: React.ReactNode }) {
+  const [unlocked, setUnlocked] = useState(() => sessionStorage.getItem(SITE_UNLOCK_KEY) === "true");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password === SITE_PASSWORD) {
+      sessionStorage.setItem(SITE_UNLOCK_KEY, "true");
+      setUnlocked(true);
+      setError("");
+    } else {
+      setError("Incorrect password.");
+    }
+  };
+
+  if (unlocked) return <>{children}</>;
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-muted/30 px-6"
+      style={{ fontFamily: "Manrope, sans-serif" }}>
+      <div className="w-full max-w-sm bg-background rounded-2xl shadow-xl p-6">
+        <div className="flex items-center gap-2 mb-5">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+            style={{ background: "var(--gradient-impact)" }}>
+            <Lock size={20} className="text-white" />
+          </div>
+          <div>
+            <p className="text-muted-foreground text-xs font-medium" style={{ fontFamily: "Montserrat, sans-serif" }}>
+              Track Now
+            </p>
+            <p className="text-foreground font-bold text-base leading-tight" style={{ fontFamily: "Montserrat, sans-serif" }}>
+              Protected Prototype
+            </p>
+          </div>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <InputField label="Site Password" required>
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                className={cn(inputCls, "pr-11")}
+                placeholder="Enter password"
+                value={password}
+                autoFocus
+                onChange={e => { setPassword(e.target.value); setError(""); }}
+                required
+              />
+              <button type="button" onClick={() => setShowPassword(p => !p)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </InputField>
+          {error && (
+            <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2.5 text-destructive text-sm">
+              <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+          <button type="submit"
+            className="w-full py-3 rounded-xl text-white font-bold text-sm hover:opacity-90 transition-opacity"
+            style={{ background: "var(--gradient-primary)", fontFamily: "Montserrat, sans-serif" }}>
+            Unlock
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Root export (provides the router) ───────────────────────────────────────
 
 export default function App() {
   return (
-    <HashRouter>
-      <Routes>
-        <Route path="/onboarding" element={<OnboardingPage />} />
-        {/* Login is the home page — AppShell handles / as well as all auth routes */}
-        <Route path="*"           element={<AppShellWithNotFound />} />
-      </Routes>
-    </HashRouter>
+    <SitePasswordGate>
+      <HashRouter>
+        <Routes>
+          {/* Login is the home page — AppShell handles / as well as all auth routes */}
+          <Route path="*" element={<AppShellWithNotFound />} />
+        </Routes>
+      </HashRouter>
+    </SitePasswordGate>
   );
 }
 
 function AppShellWithNotFound() {
   const location = useLocation();
   const knownRoutes = [
-    "/", "/login", "/dashboard", "/events", "/register",
+    "/", "/login", "/dashboard", "/activities", "/register",
     "/scan", "/reports", "/profile",
   ];
   const isKnown = knownRoutes.includes(location.pathname)
